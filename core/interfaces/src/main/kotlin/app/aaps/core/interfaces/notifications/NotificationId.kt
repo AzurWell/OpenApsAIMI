@@ -231,7 +231,13 @@ enum class NotificationId(
      * one of these reasons is shown at a time (see `LinearCalibrationPlugin`'s health check) and it
      * is dismissed once the situation resolves. Appended last on purpose, see the comment above.
      */
-    CALIBRATION_HEALTH(NORMAL, CGM);
+    CALIBRATION_HEALTH(NORMAL, CGM),
+
+    /**
+     * AIMI treats a carb-free rise as a meal and asks the user to arbitrate ("are you eating?").
+     * Appended last on purpose, because the system notification id is the ordinal.
+     */
+    AIMI_MEAL_CONFIRMATION(NORMAL, LOOP);
 
     companion object {
 
