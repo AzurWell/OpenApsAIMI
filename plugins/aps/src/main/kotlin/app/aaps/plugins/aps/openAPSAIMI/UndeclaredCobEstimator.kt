@@ -79,6 +79,8 @@ object UndeclaredCobEstimator {
         val cfrdExacerbationActive: Boolean,
         val hrInflammationElevated: Boolean,
         val maxGramsPref: Double,
+        /** User answered "I am not eating" — see MealConfirmationGate. */
+        val userDeclaredNoMeal: Boolean = false,
     )
 
     data class Result(
@@ -104,6 +106,7 @@ object UndeclaredCobEstimator {
      */
     fun estimate(input: Input): Result {
         // ── Safety gates (order = most protective first) ───────────────────────
+        if (input.userDeclaredNoMeal) return Result.gated("user_declared_no_meal")
         if (input.falseMealSuppression) return Result.gated("false_meal_suppression")
         if (input.postHypoActive) return Result.gated("post_hypo")
         if (input.bgMgdl <= HYPO_GUARD_MGDL) return Result.gated("hypo_zone")
