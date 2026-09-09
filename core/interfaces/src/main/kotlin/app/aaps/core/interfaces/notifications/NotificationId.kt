@@ -237,7 +237,13 @@ enum class NotificationId(
      * A pre-soak sensor (ONE+ / G7 or Libre 3) was switched to production by itself, without the
      * user pressing the promote button. Appended last on purpose, see the comment above.
      */
-    CGM_STAGING_AUTO_PROMOTED(NORMAL, CGM);
+    CGM_STAGING_AUTO_PROMOTED(NORMAL, CGM),
+
+    /**
+     * AIMI treats a carb-free rise as a meal and asks the user to arbitrate ("are you eating?").
+     * Appended last on purpose, because the system notification id is the ordinal.
+     */
+    AIMI_MEAL_CONFIRMATION(NORMAL, LOOP);
 
     companion object {
 
