@@ -61,6 +61,35 @@ object MealConfirmationGate {
     }
 
     /**
+     * Cancels an active "I am not eating" as soon as real meal evidence shows up.
+     *
+     * The answer is a statement about the next couple of hours, and the user can be wrong: saying
+     * "not eating" at 10:30 must not under-dose a real meal started at 11:30. Hard meal evidence
+     * therefore overrides the earlier answer immediately, without asking again:
+     *  - a manual bolus (the user's own meal dose), or
+     *  - declared carbs.
+     *
+     * Called once per tick before anything reads [isMealSuppressedByUser], so the release lands on
+     * the same tick as the bolus rather than one cycle later.
+     *
+     * @return true when an active suppression was cleared by this call.
+     */
+    fun clearIfMealEvidence(
+        preferences: Preferences,
+        now: Long,
+        recentManualBolusU: Double,
+        declaredCobG: Double,
+    ): Boolean {
+        if (!isMealSuppressedByUser(preferences, now)) return false
+        val evidence = recentManualBolusU >= MANUAL_BOLUS_MEAL_THRESHOLD_U || declaredCobG > 0.0
+        if (!evidence) return false
+        preferences.put(AimiLongKey.MealDeniedUntil, 0L)
+        // The user is eating after all: stay quiet for the meal instead of asking again at once.
+        preferences.put(AimiLongKey.MealPromptQuietUntil, now + MEAL_CONFIRMED_QUIET_MIN * MIN_MS)
+        return true
+    }
+
+    /**
      * Records the user's answer.
      *
      * @param eating true = "yes I am eating" (clears any suppression and lets AIMI proceed),
