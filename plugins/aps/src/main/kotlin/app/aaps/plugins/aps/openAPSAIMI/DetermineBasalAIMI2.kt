@@ -17434,6 +17434,21 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             tdd7Days,
         ) = runEarlyDetermineBasalStages(ctx)
 
+        // 🙅 Release an earlier "I am not eating" the moment real meal evidence arrives, BEFORE any
+        // stage reads the flag: a "no" at 10:30 must not under-dose a real meal started at 11:30.
+        if (MealConfirmationGate.clearIfMealEvidence(
+                preferences = preferences,
+                now = dateUtil.now(),
+                recentManualBolusU = getBolusesFromTimeCached(
+                    dateUtil.now() - MealConfirmationGate.MANUAL_BOLUS_LOOKBACK_MIN * 60_000L,
+                    true,
+                ).filter { it.isValid && it.type == BS.Type.NORMAL }.sumOf { it.amount },
+                declaredCobG = ctx.mealData.mealCOB,
+            )
+        ) {
+            consoleLog.add("🍽️ MEAL_CONFIRM: suppression released — real meal evidence")
+        }
+
         val isConfirmedHighRiseLocal = bootstrapPhysiologyAfterEarlyTick(ctx, tdd7Days)
         isConfirmedHighRiseThisTick = isConfirmedHighRiseLocal
 
