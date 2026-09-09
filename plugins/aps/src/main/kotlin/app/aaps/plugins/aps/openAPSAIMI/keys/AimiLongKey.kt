@@ -23,5 +23,7 @@ enum class AimiLongKey(
     /** Meal interpretation suppressed by the user until this wall-clock ms. 0 = not suppressed. */
     MealDeniedUntil("oa_aimi_meal_denied_until_ms", 0L),
     /** Last time the "are you eating?" prompt was raised, for the cooldown. */
-    MealPromptLastShown("oa_aimi_meal_prompt_last_shown_ms", 0L)
+    MealPromptLastShown("oa_aimi_meal_prompt_last_shown_ms", 0L),
+    /** User confirmed a meal: stay quiet until this wall-clock ms (covers a long meal). */
+    MealPromptQuietUntil("oa_aimi_meal_prompt_quiet_until_ms", 0L)
 }
