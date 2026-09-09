@@ -240,7 +240,13 @@ enum class NotificationId(
     CGM_STAGING_AUTO_PROMOTED(NORMAL, CGM),
 
     /** A bolus asked from a Garmin watch was refused, limited or not delivered. */
-    GARMIN_BOLUS(IMPORTANT, SYNC);
+    GARMIN_BOLUS(IMPORTANT, SYNC),
+
+    /**
+     * AIMI treats a carb-free rise as a meal and asks the user to arbitrate ("are you eating?").
+     * Appended last on purpose, because the system notification id is the ordinal.
+     */
+    AIMI_MEAL_CONFIRMATION(NORMAL, LOOP);
 
     companion object {
 
