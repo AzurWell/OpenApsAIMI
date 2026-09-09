@@ -38,6 +38,16 @@ object MealConfirmationGate {
     /** Below this, a bolus is a correction/SMB artefact rather than a meal bolus. */
     const val MANUAL_BOLUS_MEAL_THRESHOLD_U = 0.8
 
+    /**
+     * How long an explicit "I am eating" keeps the prompt quiet.
+     *
+     * A long meal (aperitif then dinner over three hours) keeps the rise going well past
+     * [MANUAL_BOLUS_LOOKBACK_MIN] after the last manual bolus, so the plain
+     * [PROMPT_COOLDOWN_MIN] would ask again every 45 min through the whole meal. Answering
+     * "I am eating" once should settle it for the meal.
+     */
+    const val MEAL_CONFIRMED_QUIET_MIN = 180L
+
     private const val MIN_MS = 60_000L
 
     /** True while the user's "not eating" answer is still in force. */
@@ -61,6 +71,11 @@ object MealConfirmationGate {
             AimiLongKey.MealDeniedUntil,
             if (eating) 0L else now + SUPPRESSION_WINDOW_MIN * MIN_MS,
         )
+        // "I am eating" also buys quiet for the length of a long meal, not just one cooldown.
+        preferences.put(
+            AimiLongKey.MealPromptQuietUntil,
+            if (eating) now + MEAL_CONFIRMED_QUIET_MIN * MIN_MS else 0L,
+        )
         preferences.put(AimiLongKey.MealPromptLastShown, now)
     }
 
@@ -82,6 +97,8 @@ object MealConfirmationGate {
         if (declaredCobG > 0.0) return false
         // Implicit "I am eating": the user already bolused by hand for this rise.
         if (recentManualBolusU >= MANUAL_BOLUS_MEAL_THRESHOLD_U) return false
+        // The user already said they are eating; stay quiet for the rest of the meal.
+        if (now < preferences.get(AimiLongKey.MealPromptQuietUntil)) return false
         if (isMealSuppressedByUser(preferences, now)) return false
         val lastShown = preferences.get(AimiLongKey.MealPromptLastShown)
         return now - lastShown >= PROMPT_COOLDOWN_MIN * MIN_MS
@@ -96,6 +113,8 @@ object MealConfirmationGate {
     fun statusLine(preferences: Preferences, now: Long): String =
         if (isMealSuppressedByUser(preferences, now)) {
             "🙅 MEAL_DENIED_BY_USER ${remainingSuppressionMinutes(preferences, now)}min left"
+        } else if (now < preferences.get(AimiLongKey.MealPromptQuietUntil)) {
+            "🍽️ meal-confirm: meal confirmed by user, quiet"
         } else {
             "🍽️ meal-confirm: idle"
         }
