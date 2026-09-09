@@ -1875,4 +1875,9 @@
     <string name="aimi_hormonitor_hypo_suppressed">Predictive hypo suppressed</string>
     <string name="aimi_hormonitor_composite_min">Composite min</string>
     <string name="aimi_hormonitor_mean">mean</string>
+    <!-- 🙅 AIMI meal confirmation (user-arbitrated meal interpretation) -->
+    <string name="aimi_meal_confirm_notification">AIMI is dosing this rise as a meal (BG %1$s, no carbs entered). Are you eating?</string>
+    <string name="aimi_meal_confirm_action_not_eating">I am not eating</string>
+    <string name="aimi_meal_confirm_action_eating">I am eating</string>
+    <string name="aimi_meal_confirm_suppressed">Meal interpretation suppressed for %1$d min</string>
 </resources>

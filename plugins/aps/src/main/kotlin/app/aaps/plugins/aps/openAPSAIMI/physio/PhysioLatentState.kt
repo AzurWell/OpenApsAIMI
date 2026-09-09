@@ -88,6 +88,8 @@ internal object PhysioLatentStateBuilder {
         inflammationRecovery: Double,
         hormonalCircadian: Double,
         cgmFirstSensorConfidence: Boolean = false,
+        /** User answered "I am not eating" — see MealConfirmationGate. Overrides inference. */
+        userDeclaredNoMeal: Boolean = false,
     ): PhysioLatentState {
         val mealSignal = buildMealProbability(
             phaseOutput = phaseOutput,
@@ -139,7 +141,8 @@ internal object PhysioLatentStateBuilder {
             ) * 0.24
             ).coerceIn(0.76, 1.0)
         val falseMealSuppression =
-            hypothesisState?.suppressMealInterpretation == true ||
+            userDeclaredNoMeal ||
+                hypothesisState?.suppressMealInterpretation == true ||
                 patternSnapshot?.suppressMealInterpretation == true ||
                 phaseOutput?.policy?.suppressMealLikeScenario == true ||
                 (endogenousDrive > mealSignal + 0.15)

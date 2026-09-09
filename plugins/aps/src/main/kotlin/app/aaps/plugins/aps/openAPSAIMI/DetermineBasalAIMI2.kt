@@ -63,6 +63,8 @@ import app.aaps.plugins.aps.openAPSAIMI.utils.AimiStorageHelper
 import app.aaps.plugins.aps.openAPSAIMI.model.Constants
 import app.aaps.core.data.model.HR
 import app.aaps.plugins.aps.openAPSAIMI.model.DecisionResult
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationGate
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationPrompt
 import app.aaps.plugins.aps.openAPSAIMI.ml.AimiSmbTrainer
 import app.aaps.plugins.aps.openAPSAIMI.ml.SmbRefinementFeatureSchema
 import app.aaps.plugins.aps.openAPSAIMI.ml.SmbTrainingRowBuffer
@@ -3628,6 +3630,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             inflammationRecovery = stressMask.inflammationRecovery,
             hormonalCircadian = stressMask.hormonalCircadian,
             cgmFirstSensorConfidence = preferences.get(BooleanKey.OApsAIMISensorConfidenceCgmFirst),
+            userDeclaredNoMeal = MealConfirmationGate.isMealSuppressedByUser(preferences, dateUtil.now()),
         )
         lastUamHypothesisState = hypothesisState
         lastPhysioLatentState = latentState
@@ -17100,6 +17103,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 cfrdExacerbationActive = cfrdExacerbationActive,
                 hrInflammationElevated = hrInflammationElevated,
                 maxGramsPref = preferences.get(DoubleKey.OApsAIMIUndeclaredCobMaxG),
+                userDeclaredNoMeal = MealConfirmationGate.isMealSuppressedByUser(preferences, dateUtil.now()),
             )
         )
         consoleLog.add("🍽️ VIRTUAL_COB: ${result.toLogString()}")
@@ -18113,6 +18117,24 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             basalBoostApplied = basalBoostApplied,
             basalBoostSource = basalBoostSource,
         )
+
+        // 🙅 User-arbitrated meal interpretation: ask before dosing a carb-free rise as a meal.
+        // Silence keeps current behaviour; only an explicit "I am not eating" suppresses it.
+        MealConfirmationPrompt.raiseIfNeeded(
+            notificationManager = notificationManager,
+            preferences = preferences,
+            context = context,
+            now = dateUtil.now(),
+            mealInterpretationActive = lastPhysiologicalPhaseOutput?.phase?.isMealRisk == true,
+            declaredCobG = ctx.mealData.mealCOB,
+            bgMgdl = glucoseStatus.glucose,
+            recentBoluses = getBolusesFromTimeCached(
+                dateUtil.now() - MealConfirmationGate.MANUAL_BOLUS_LOOKBACK_MIN * 60_000L,
+                true,
+            ),
+            onAnswer = { eating -> consoleLog.add("🙅 MEAL_CONFIRM: user answered eating=$eating") },
+        )
+        consoleLog.add(MealConfirmationGate.statusLine(preferences, dateUtil.now()))
 
         // BasalDecisionEngine: [targetBg] = membre instance (objectif loop / temp target), pas le local [target_bg] (bande schedule) — même contrat qu’avant extraction orchestration.
         val basalDecision = runBasalDecisionEngineDecideStage(

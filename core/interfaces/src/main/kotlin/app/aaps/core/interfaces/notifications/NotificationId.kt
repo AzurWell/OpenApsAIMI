@@ -223,7 +223,13 @@ enum class NotificationId(
      * file. It has its own id so the two plugins never clear each other's notification.
      * Appended last on purpose, because the system notification id is the ordinal.
      */
-    LIBRE3_DIR_ACCESS_LOST(NORMAL, SYSTEM);
+    LIBRE3_DIR_ACCESS_LOST(NORMAL, SYSTEM),
+
+    /**
+     * AIMI treats a carb-free rise as a meal and asks the user to arbitrate ("are you eating?").
+     * Appended last on purpose, because the system notification id is the ordinal.
+     */
+    AIMI_MEAL_CONFIRMATION(NORMAL, LOOP);
 
     companion object {
 
