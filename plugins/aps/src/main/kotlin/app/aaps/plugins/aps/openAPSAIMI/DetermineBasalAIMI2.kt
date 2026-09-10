@@ -65,6 +65,8 @@ import app.aaps.core.data.model.HR
 import app.aaps.plugins.aps.openAPSAIMI.model.DecisionResult
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationPrompt
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealKnownGate
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.SecondWaveGate
 import app.aaps.plugins.aps.openAPSAIMI.ml.AimiSmbTrainer
 import app.aaps.plugins.aps.openAPSAIMI.ml.SmbRefinementFeatureSchema
 import app.aaps.plugins.aps.openAPSAIMI.ml.SmbTrainingRowBuffer
@@ -11438,6 +11440,10 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     private var lastEffortAssessment: EffortActivityBelief.Assessment? = null
     /** Absolute context SMB ceiling (SlowCarbMeal); enforced robustly at [finalizeAndCapSMB]. Per-tick. */
     private var lastContextSmbCeilingU: Double? = null
+
+    /** Second-rise verdict of this tick. Worked out even when the feature is off (shadow mode). */
+    private var lastSecondWaveVerdict: SecondWaveGate.Verdict = SecondWaveGate.Verdict.INACTIVE
+
     /** Hard context SMB-off (HypoRecovery); enforced robustly at [finalizeAndCapSMB]. Per-tick. */
     private var lastContextSuppressSmb: Boolean = false
     /** Cumulative context-SMB budget for a SlowCarbMeal early window (anti-overshoot, Q5). Cross-tick. */
@@ -12619,6 +12625,17 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         return bolusQueryCache.getOrPut(key) {
             bolusesFromTimeCached(startTime, ascending)
         }
+    }
+
+    /**
+     * SMB units given since the meal window was opened, for the second-rise budget.
+     * Returns 0 when no meal is known.
+     */
+    private fun smbDeliveredSinceMealArmU(): Double {
+        val elapsedMs = MealKnownGate.elapsedSinceArmMs(preferences, dateUtil.now()) ?: return 0.0
+        return getBolusesFromTimeCached(dateUtil.now() - elapsedMs, true)
+            .filter { it.isValid && it.type == BS.Type.SMB }
+            .sumOf { it.amount }
     }
 
     private fun buildRecentPkpdBolusSamples(nowMillis: Long, fallbackWindowMin: Int): List<PkpdBolusSample> {
@@ -14019,6 +14036,20 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                         consoleLog.add("🍕 CTX_SMB_CEILING: ${"%.2f".format(Locale.US, finalUnits)}→${"%.2f".format(Locale.US, ceil)}U")
                         rT.reason.append("🍕slowCarb cap${"%.1f".format(Locale.US, ceil)} ")
                         finalUnits = ceil.coerceAtLeast(0.0)
+                    }
+                }
+                // 🌊 Second rise of a meal that is already running. Reduction only, bolus channel
+                // only: the temporary basal keeps working. Off unless the user turned the key on.
+                if (preferences.get(BooleanKey.OApsAIMISecondWaveGuard)) {
+                    lastSecondWaveVerdict.ceilingU?.let { ceil ->
+                        if (finalUnits > ceil) {
+                            consoleLog.add(
+                                "🌊 SECOND_WAVE_CAP: ${"%.2f".format(Locale.US, finalUnits)}→" +
+                                    "${"%.2f".format(Locale.US, ceil)}U (${lastSecondWaveVerdict.reason})"
+                            )
+                            rT.reason.append("🌊secondWave cap${"%.2f".format(Locale.US, ceil)} ")
+                            finalUnits = ceil.coerceAtLeast(0.0)
+                        }
                     }
                 }
                 // Cumulative early-window SMB budget (Q5): a past hard effort cannot stack context-SMB
@@ -16944,7 +16975,10 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         if (a.posture != EffortActivityBelief.Posture.EXERTION) return false
         if (a.state != EffortActivityBelief.State.ACTIVE && a.state != EffortActivityBelief.State.RECENT_EFFORT) return false
         if (a.confidence < EFFORT_MEAL_SUPPRESS_CONF) return false
-        val declaredMeal = mealTime || bfastTime || lunchTime || dinnerTime || snackTime || highCarbTime
+        // A meal known through MealKnownGate counts here too: the user declared it with their own
+        // bolus or with the prompt, without paying for a meal mode.
+        val declaredMeal = mealTime || bfastTime || lunchTime || dinnerTime || snackTime || highCarbTime ||
+            MealKnownGate.isMealKnown(preferences, dateUtil.now())
         return !declaredMeal && cob.toDouble() < EFFORT_MEAL_SUPPRESS_MAX_COB_G
     }
 
@@ -17448,6 +17482,40 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         ) {
             consoleLog.add("🍽️ MEAL_CONFIRM: suppression released — real meal evidence")
         }
+
+        // 🍽️ Light meal button: an "eating" note opens the window and doses nothing.
+        if (MealKnownGate.armFromNote(preferences, dateUtil.now(), therapy.mealKnownStartMs)) {
+            consoleLog.add("🍽️ MEAL_KNOWN: armed by the eating note")
+        }
+
+        // 🍽️ The user's own prebolus is the meal declaration: no button, no carb count.
+        // Only opens the knowledge window (MealKnownGate). It never doses anything by itself.
+        MealKnownGate.armFromManualBolus(
+            preferences = preferences,
+            now = dateUtil.now(),
+            boluses = getBolusesFromTimeCached(
+                dateUtil.now() - MealKnownGate.MEAL_WINDOW_MIN * 60_000L,
+                true,
+            ),
+            bgMgdl = bg,
+            deltaMgdl = delta.toDouble(),
+        )?.let { armed ->
+            consoleLog.add(
+                "🍽️ MEAL_KNOWN: armed by manual bolus ${"%.2f".format(armed.amount)}U " +
+                    "at bg=${bg.toInt()} delta=${"%.1f".format(delta)}"
+            )
+        }
+
+        // Second rise of the same meal. Worked out every tick, applied only when the key is on.
+        lastSecondWaveVerdict = SecondWaveGate.evaluate(
+            preferences = preferences,
+            now = dateUtil.now(),
+            iobU = iob.toDouble(),
+            declaredCobG = ctx.mealData.mealCOB,
+            bgMgdl = bg,
+            deltaMgdl = delta.toDouble(),
+            smbDeliveredSinceArmU = smbDeliveredSinceMealArmU(),
+        )
 
         val isConfirmedHighRiseLocal = bootstrapPhysiologyAfterEarlyTick(ctx, tdd7Days)
         isConfirmedHighRiseThisTick = isConfirmedHighRiseLocal
@@ -18147,9 +18215,18 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 dateUtil.now() - MealConfirmationGate.MANUAL_BOLUS_LOOKBACK_MIN * 60_000L,
                 true,
             ),
+            exerciseLockoutActive = exerciseInsulinLockoutActive,
             onAnswer = { eating -> consoleLog.add("🙅 MEAL_CONFIRM: user answered eating=$eating") },
         )
         consoleLog.add(MealConfirmationGate.statusLine(preferences, dateUtil.now()))
+        consoleLog.add(MealKnownGate.statusLine(preferences, dateUtil.now()))
+        // rT.reason is what reaches Nightscout, so the meal state can be followed remotely.
+        rT.reason.append(MealConfirmationGate.statusLine(preferences, dateUtil.now())).append(" ")
+        rT.reason.append(MealKnownGate.statusLine(preferences, dateUtil.now())).append(" ")
+        if (lastSecondWaveVerdict.active) {
+            consoleLog.add("🌊 SECOND_WAVE: ${lastSecondWaveVerdict.reason}")
+            rT.reason.append("🌊secondWave ").append(lastSecondWaveVerdict.reason).append(" ")
+        }
 
         // BasalDecisionEngine: [targetBg] = membre instance (objectif loop / temp target), pas le local [target_bg] (bande schedule) — même contrat qu’avant extraction orchestration.
         val basalDecision = runBasalDecisionEngineDecideStage(
