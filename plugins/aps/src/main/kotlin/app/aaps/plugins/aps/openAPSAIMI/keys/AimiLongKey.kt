@@ -25,5 +25,15 @@ enum class AimiLongKey(
     /** Last time the "are you eating?" prompt was raised, for the cooldown. */
     MealPromptLastShown("oa_aimi_meal_prompt_last_shown_ms", 0L),
     /** User confirmed a meal: stay quiet until this wall-clock ms (covers a long meal). */
-    MealPromptQuietUntil("oa_aimi_meal_prompt_quiet_until_ms", 0L)
+    MealPromptQuietUntil("oa_aimi_meal_prompt_quiet_until_ms", 0L),
+
+    // 🍽️ Meal knowledge, decoupled from the meal modes (MealKnownGate)
+    /** A meal is considered in progress until this wall-clock ms. 0 = no meal known. */
+    MealKnownUntil("oa_aimi_meal_known_until_ms", 0L),
+    /** When the current meal window was opened, for the second-wave elapsed time. */
+    MealKnownArmedAt("oa_aimi_meal_known_armed_at_ms", 0L),
+    /** Timestamp of the last manual bolus already examined, so one bolus arms at most once. */
+    MealKnownLastBolusMs("oa_aimi_meal_known_last_bolus_ms", 0L),
+    /** Timestamp of the last "eating" note already used, so one note arms at most once. */
+    MealKnownLastNoteMs("oa_aimi_meal_known_last_note_ms", 0L)
 }
