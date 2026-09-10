@@ -28,6 +28,10 @@ object MealConfirmationPrompt {
      *
      * @param recentBoluses boluses over the last [MealConfirmationGate.MANUAL_BOLUS_LOOKBACK_MIN]
      *   minutes; only manual ones ([BS.Type.NORMAL]) count as "I am eating".
+     * @param exerciseLockoutActive sport mode or an activity context is running. A rise during
+     *   effort is adrenaline, not food, and SMBs are already off, so the question would only be
+     *   noise — and a "no" would burn a 120 min window that runs after the sport, when the user
+     *   may really be eating.
      * @param onAnswer optional hook invoked with the user's answer, for learning/telemetry.
      * @return true when a prompt was actually raised on this tick.
      */
@@ -40,8 +44,10 @@ object MealConfirmationPrompt {
         declaredCobG: Double,
         bgMgdl: Double,
         recentBoluses: List<BS> = emptyList(),
+        exerciseLockoutActive: Boolean = false,
         onAnswer: ((eating: Boolean) -> Unit)? = null,
     ): Boolean {
+        if (exerciseLockoutActive) return false
         // Manual meal boluses only: an SMB is the loop's own dose, not a statement of intent.
         val manualBolusU = recentBoluses
             .filter { it.isValid && it.type == BS.Type.NORMAL }
@@ -82,7 +88,11 @@ object MealConfirmationPrompt {
         eating: Boolean,
         onAnswer: ((Boolean) -> Unit)?,
     ) {
-        MealConfirmationGate.recordUserAnswer(preferences, System.currentTimeMillis(), eating)
+        val now = System.currentTimeMillis()
+        MealConfirmationGate.recordUserAnswer(preferences, now, eating)
+        // "I am eating" is a declaration: open the meal window, the same one a manual prebolus
+        // opens. "I am not eating" closes it, so an earlier meal cannot keep a second rise quiet.
+        if (eating) MealKnownGate.arm(preferences, now) else MealKnownGate.clear(preferences)
         notificationManager.dismiss(NotificationId.AIMI_MEAL_CONFIRMATION)
         onAnswer?.invoke(eating)
     }
