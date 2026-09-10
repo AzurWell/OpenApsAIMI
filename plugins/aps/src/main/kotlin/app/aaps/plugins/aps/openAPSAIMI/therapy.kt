@@ -44,6 +44,15 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
     var calibrationTime = false
     var deleteEventDate: String? = null
     var deleteTime = false
+
+    /**
+     * Timestamp of the newest active "eating" note, 0 when there is none.
+     *
+     * This is the light meal button: it says a meal is running and nothing else. Unlike the meal
+     * modes ("meal", "lunch", "dinner", ...) it sends no prebolus, does not raise the SMB ceiling
+     * and does not raise the basal cap. `MealKnownGate` reads it.
+     */
+    var mealKnownStartMs = 0L
     private var latestNoteEvents: List<TE> = emptyList()
 
     fun updateStatesBasedOnTherapyEvents(forceRefresh: Boolean = false) {
@@ -100,6 +109,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
                 mealTime = findActiveMealEvents(events, now),
                 anticipTime = findActiveAnticipEvents(events, now),
                 fclTime = findActiveFclEvents(events, now),
+                mealKnownStartMs = findActiveMealKnownStart(events, now),
                 bfastTime = findActivebfastEvents(events, now),
                 lunchTime = findActiveLunchEvents(events, now),
                 dinnerTime = findActiveDinnerEvents(events, now),
@@ -123,6 +133,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
             mealTime = false,
             anticipTime = false,
             fclTime = false,
+            mealKnownStartMs = 0L,
             bfastTime = false,
             lunchTime = false,
             dinnerTime = false,
@@ -145,6 +156,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
         persistenceLayer.deleteLastEventMatchingKeyword("meal")
         persistenceLayer.deleteLastEventMatchingKeyword("anticip")
         persistenceLayer.deleteLastEventMatchingKeyword("fcl")
+        persistenceLayer.deleteLastEventMatchingKeyword("eating")
         persistenceLayer.deleteLastEventMatchingKeyword("bfast")
         persistenceLayer.deleteLastEventMatchingKeyword("lunch")
         persistenceLayer.deleteLastEventMatchingKeyword("dinner")
@@ -161,6 +173,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
         mealTime = snapshot.mealTime
         anticipTime = snapshot.anticipTime
         fclTime = snapshot.fclTime
+        mealKnownStartMs = snapshot.mealKnownStartMs
         bfastTime = snapshot.bfastTime
         lunchTime = snapshot.lunchTime
         dinnerTime = snapshot.dinnerTime
@@ -181,12 +194,27 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
         mealTime = false
         anticipTime = false
         fclTime = false
+        mealKnownStartMs = 0L
         bfastTime = false
         lunchTime = false
         dinnerTime = false
         fastingTime = false
         deleteTime = false
     }
+
+    /**
+     * Newest active note holding "eating", or 0 when none is running.
+     *
+     * The timestamp is returned rather than a boolean so `MealKnownGate` can open its window once
+     * per note instead of pushing the end further away on every tick.
+     */
+    private fun findActiveMealKnownStart(events: List<TE>, now: Long): Long =
+        events.filter { it.type == TE.Type.NOTE }
+            .filter { event ->
+                event.note?.contains("eating", ignoreCase = true) == true &&
+                    now <= (event.timestamp + event.duration)
+            }
+            .maxOfOrNull { it.timestamp } ?: 0L
 
     private fun findActiveSleepEvents(events: List<TE>, now: Long): Boolean =
         events.filter { it.type == TE.Type.NOTE }
@@ -338,6 +366,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
         val mealTime: Boolean,
         val anticipTime: Boolean,
         val fclTime: Boolean,
+        val mealKnownStartMs: Long,
         val bfastTime: Boolean,
         val lunchTime: Boolean,
         val dinnerTime: Boolean,
