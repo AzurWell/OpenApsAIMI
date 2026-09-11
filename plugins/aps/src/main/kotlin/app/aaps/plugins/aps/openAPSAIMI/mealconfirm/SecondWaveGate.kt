@@ -33,8 +33,24 @@ object SecondWaveGate {
      */
     const val MIN_ELAPSED_MIN = 120L
 
-    /** Under this, nothing is stacked yet, so there is nothing to protect against. */
-    const val MIN_IOB_U = 4.0
+    /**
+     * Past this, the rise belongs to something else and the meal's clock is no longer relevant.
+     *
+     * Kept well beyond [MealKnownGate.MEAL_WINDOW_MIN] on purpose: that window answers "is a meal
+     * running?", which is a 3 h question, while a slow meal's second rise can start later than
+     * that. Measured on 2026-09-11 — a pasta lunch at 14:46, glucose back up from 72 to 144 between
+     * 15:47 and 17:02, still climbing at t+2h20 with the meal window 44 minutes from expiry.
+     */
+    const val MAX_ELAPSED_MIN = 300L
+
+    /**
+     * Under this, nothing is stacked yet, so there is nothing to protect against.
+     *
+     * Was 4.0 U, taken from the episode of 2026-08-13 (11.5 U in 22 SMBs, 289 → 56 mg/dL). That is
+     * the extreme, not the ordinary case: the second rise of 2026-09-11 ran at 2.0-2.8 U of IOB and
+     * the gate never armed, so the shadow mode measured nothing at all on a textbook episode.
+     */
+    const val MIN_IOB_U = 2.5
 
     /** Largest SMB allowed while a second rise is running. */
     const val SMB_CEILING_U = 0.4
@@ -53,6 +69,28 @@ object SecondWaveGate {
 
     /** Under this there is no rise worth fighting, whatever the delta says. */
     const val MIN_BG_MGDL = 140.0
+
+    /**
+     * A second rise comes back **up**. A meal that never came down is a different problem.
+     *
+     * The user sometimes eats a baguette with a lot of cheese and sits at 250 mg/dL for six hours.
+     * That plateau meets every other condition here — a meal is known, hours have passed, insulin is
+     * on board, glucose is high — and a flat 250 still produces the odd `delta >= 2` along the way.
+     * Capping boluses there would hold him at 250 for longer, which is the opposite of the point.
+     *
+     * So the gate also asks for the shape: glucose must have come back down near normal since the
+     * meal, and climbed away from that low again. The pasta lunch of 2026-09-11 did exactly that —
+     * peak 123, trough 72, back to 144. The baguette never does.
+     */
+    const val TROUGH_MAX_MGDL = 140.0
+    const val REBOUND_MIN_MGDL = 30.0
+
+    /**
+     * The shape that tells a second rise from a meal that never came down. Kept apart so it can be
+     * unit tested. See [TROUGH_MAX_MGDL].
+     */
+    fun looksLikeSecondRise(bgMgdl: Double, troughMgdl: Double): Boolean =
+        troughMgdl <= TROUGH_MAX_MGDL && bgMgdl - troughMgdl >= REBOUND_MIN_MGDL
 
     data class Verdict(
         /** True when this tick is inside a second rise. */
@@ -75,6 +113,7 @@ object SecondWaveGate {
      * before it is turned on, the same way upstream ships `DescentRedoseGuard`.
      *
      * @param smbDeliveredSinceArmU SMB units given since the meal window was opened.
+     * @param bgMinSinceArmMgdl lowest glucose since the meal was declared — see [TROUGH_MAX_MGDL].
      */
     fun evaluate(
         preferences: Preferences,
@@ -84,14 +123,18 @@ object SecondWaveGate {
         bgMgdl: Double,
         deltaMgdl: Double,
         smbDeliveredSinceArmU: Double,
+        bgMinSinceArmMgdl: Double?,
     ): Verdict {
         if (declaredCobG > 0.0) return Verdict.INACTIVE
-        val elapsedMs = MealKnownGate.elapsedSinceArmMs(preferences, now) ?: return Verdict.INACTIVE
+        val elapsedMs = MealKnownGate.msSinceArm(preferences, now) ?: return Verdict.INACTIVE
         val elapsedMin = elapsedMs / 60_000L
-        if (elapsedMin < MIN_ELAPSED_MIN) return Verdict.INACTIVE
+        if (elapsedMin < MIN_ELAPSED_MIN || elapsedMin > MAX_ELAPSED_MIN) return Verdict.INACTIVE
         if (iobU < MIN_IOB_U) return Verdict.INACTIVE
         if (bgMgdl < MIN_BG_MGDL) return Verdict.INACTIVE
         if (deltaMgdl < MIN_DELTA_MGDL) return Verdict.INACTIVE
+        // Shape check: this must be a rise back up, not a meal that never came down.
+        val trough = bgMinSinceArmMgdl ?: return Verdict.INACTIVE
+        if (!looksLikeSecondRise(bgMgdl, trough)) return Verdict.INACTIVE
 
         val budgetLeft = (BUDGET_U - smbDeliveredSinceArmU).coerceAtLeast(0.0)
         val ceiling = minOf(SMB_CEILING_U, budgetLeft)
@@ -99,7 +142,7 @@ object SecondWaveGate {
             active = true,
             ceilingU = ceiling,
             reason = "2nd wave t+${elapsedMin}min iob=${"%.1f".format(iobU)}U " +
-                "left=${"%.1f".format(budgetLeft)}U cap=${"%.2f".format(ceiling)}U",
+                "trough=${trough.toInt()} left=${"%.1f".format(budgetLeft)}U cap=${"%.2f".format(ceiling)}U",
         )
     }
 }
