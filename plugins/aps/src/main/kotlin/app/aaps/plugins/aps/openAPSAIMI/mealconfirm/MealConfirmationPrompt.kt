@@ -86,9 +86,10 @@ object MealConfirmationPrompt {
                 bgText,
                 String.format(Locale.US, "%.1f", smbLast30MinU),
             ),
-            level = if (escalate) NotificationLevel.URGENT else NotificationLevel.NORMAL,
+            // IMPORTANT, never URGENT: the user asked for no sound. This only lifts the banner to
+            // the top of the list and puts the amount in its text.
+            level = if (escalate) NotificationLevel.IMPORTANT else NotificationLevel.NORMAL,
             validMinutes = VALID_MINUTES,
-            soundRes = if (escalate) app.aaps.core.ui.R.raw.alarm else null,
             actions = listOf(
                 NotificationAction(R.string.aimi_meal_confirm_action_not_eating) {
                     answer(notificationManager, preferences, eating = false, onAnswer = onAnswer)
