@@ -12686,6 +12686,14 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         }
     }
 
+    /** SMB units given over the last [MealConfirmationGate.AGGRESSIVE_SMB_WINDOW_MIN] minutes. */
+    private fun smbLast30MinU(now: Long): Double {
+        val since = now - MealConfirmationGate.AGGRESSIVE_SMB_WINDOW_MIN * 60_000L
+        return mealGateBoluses(now)
+            .filter { it.isValid && it.type == BS.Type.SMB && it.timestamp >= since }
+            .sumOf { it.amount }
+    }
+
     /**
      * SMB units given since the meal window was opened, for the second-rise budget.
      * Returns 0 when no meal is known.
@@ -18245,6 +18253,8 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 it.timestamp >= dateUtil.now() - MealConfirmationGate.MANUAL_BOLUS_LOOKBACK_MIN * 60_000L
             },
             exerciseLockoutActive = exerciseInsulinLockoutActive,
+            smbLast30MinU = smbLast30MinU(dateUtil.now()),
+            deltaMgdl = glucoseStatus.delta,
             onAnswer = { eating -> consoleLog.add("🙅 MEAL_CONFIRM: user answered eating=$eating") },
         )
         consoleLog.add(MealConfirmationGate.statusLine(preferences, dateUtil.now()))
