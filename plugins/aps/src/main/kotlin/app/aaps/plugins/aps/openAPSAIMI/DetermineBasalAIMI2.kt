@@ -2977,6 +2977,42 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         this.snackrunTime = therapy.getTimeElapsedSinceLastEvent("snack")
         observeCircadianMealProfile(ctx.currentTime)
         this.iscalibration = therapy.calibrationTime
+
+        // 🍽️ Light meal button: an "eating" note opens the window and doses nothing.
+        // Placed here and not in [runDetermineBasalTickInner]: `therapy` only exists in this
+        // function, and `bg`/`delta` are only refreshed by the stage just above.
+        if (MealKnownGate.armFromNote(preferences, dateUtil.now(), therapy.mealKnownStartMs)) {
+            consoleLog.add("🍽️ MEAL_KNOWN: armed by the eating note")
+        }
+
+        // 🍽️ The user's own prebolus is the meal declaration: no button, no carb count.
+        // Only opens the knowledge window (MealKnownGate). It never doses anything by itself.
+        MealKnownGate.armFromManualBolus(
+            preferences = preferences,
+            now = dateUtil.now(),
+            boluses = getBolusesFromTimeCached(
+                dateUtil.now() - MealKnownGate.MEAL_WINDOW_MIN * 60_000L,
+                true,
+            ),
+            bgMgdl = bg,
+            deltaMgdl = delta.toDouble(),
+        )?.let { armed ->
+            consoleLog.add(
+                "🍽️ MEAL_KNOWN: armed by manual bolus ${"%.2f".format(Locale.US, armed.amount)}U " +
+                    "at bg=${bg.toInt()} delta=${"%.1f".format(Locale.US, delta)}"
+            )
+        }
+
+        // Second rise of the same meal. Worked out every tick, applied only when the key is on.
+        lastSecondWaveVerdict = SecondWaveGate.evaluate(
+            preferences = preferences,
+            now = dateUtil.now(),
+            iobU = iob.toDouble(),
+            declaredCobG = ctx.mealData.mealCOB,
+            bgMgdl = bg,
+            deltaMgdl = delta.toDouble(),
+            smbDeliveredSinceArmU = smbDeliveredSinceMealArmU(),
+        )
         this.acceleratingUp = if (delta > 2 && delta - longAvgDelta > 2) 1 else 0
         this.decceleratingUp = if (delta > 0 && (delta < shortAvgDelta || delta < longAvgDelta)) 1 else 0
         this.acceleratingDown = if (delta < -2 && delta - longAvgDelta < -2) 1 else 0
@@ -17461,6 +17497,8 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         // Causal censoring of the basal label needs the carbs of THIS tick, and the basal-learning hook
         // runs on paths that have no access to `ctx`. See [basalLearningCobGrams].
         tickCobGrams = ctx.mealData.mealCOB.takeIf { it.isFinite() && it >= 0.0 } ?: Double.NaN
+        // Reset before any early return can leave the previous tick's verdict in place.
+        lastSecondWaveVerdict = SecondWaveGate.Verdict.INACTIVE
         val (
             originalProfile,
             isExplicitAdvisorRun,
@@ -17482,40 +17520,6 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         ) {
             consoleLog.add("🍽️ MEAL_CONFIRM: suppression released — real meal evidence")
         }
-
-        // 🍽️ Light meal button: an "eating" note opens the window and doses nothing.
-        if (MealKnownGate.armFromNote(preferences, dateUtil.now(), therapy.mealKnownStartMs)) {
-            consoleLog.add("🍽️ MEAL_KNOWN: armed by the eating note")
-        }
-
-        // 🍽️ The user's own prebolus is the meal declaration: no button, no carb count.
-        // Only opens the knowledge window (MealKnownGate). It never doses anything by itself.
-        MealKnownGate.armFromManualBolus(
-            preferences = preferences,
-            now = dateUtil.now(),
-            boluses = getBolusesFromTimeCached(
-                dateUtil.now() - MealKnownGate.MEAL_WINDOW_MIN * 60_000L,
-                true,
-            ),
-            bgMgdl = bg,
-            deltaMgdl = delta.toDouble(),
-        )?.let { armed ->
-            consoleLog.add(
-                "🍽️ MEAL_KNOWN: armed by manual bolus ${"%.2f".format(armed.amount)}U " +
-                    "at bg=${bg.toInt()} delta=${"%.1f".format(delta)}"
-            )
-        }
-
-        // Second rise of the same meal. Worked out every tick, applied only when the key is on.
-        lastSecondWaveVerdict = SecondWaveGate.evaluate(
-            preferences = preferences,
-            now = dateUtil.now(),
-            iobU = iob.toDouble(),
-            declaredCobG = ctx.mealData.mealCOB,
-            bgMgdl = bg,
-            deltaMgdl = delta.toDouble(),
-            smbDeliveredSinceArmU = smbDeliveredSinceMealArmU(),
-        )
 
         val isConfirmedHighRiseLocal = bootstrapPhysiologyAfterEarlyTick(ctx, tdd7Days)
         isConfirmedHighRiseThisTick = isConfirmedHighRiseLocal
