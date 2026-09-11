@@ -633,6 +633,42 @@ class ContextManager @Inject constructor(
         notifyPatientStateChanged()
     }
 
+    /**
+     * Cancel a context that came from Nightscout.
+     *
+     * The coach app posts the sport context before the ride and can only say how
+     * long it should last. When the ride really ends, there was no way to tell
+     * AIMI about it: the context stayed active until its own end time. This is
+     * the way back.
+     *
+     * @param intentId Id of the intent to remove, or "ALL" to remove every
+     *                 activity intent (the coach app renews the context in short
+     *                 blocks, so more than one can be active at the same time).
+     * @param receivedPin Remote control PIN, checked like [injectContextFromNS].
+     * @return Number of removed intents.
+     */
+    @Synchronized
+    fun cancelContextFromNS(intentId: String, receivedPin: String? = null): Int {
+        val configuredPin = sp.getString(AimiStringKey.RemoteControlPin.key, "").trim()
+        val incomingPin = receivedPin?.trim().orEmpty()
+        if (configuredPin.isBlank()) {
+            aapsLogger.warn(LTag.APS, "[ContextManager] Rejecting NS cancel $intentId: AIMI remote PIN not configured")
+            return 0
+        }
+        if (incomingPin != configuredPin) {
+            aapsLogger.warn(LTag.APS, "[ContextManager] Rejecting NS cancel $intentId: invalid or missing PIN")
+            return 0
+        }
+
+        val removed = if (intentId == "ALL") {
+            removeByType(Activity::class.java)
+        } else {
+            if (removeIntent(intentId)) 1 else 0
+        }
+        aapsLogger.info(LTag.APS, "[ContextManager] \u2705 Cancelled $removed context(s) from NS: $intentId")
+        return removed
+    }
+
     private fun notifyPatientStateChanged() {
         val snapshot = try {
             getSnapshot(dateUtil.now())
