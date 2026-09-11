@@ -3009,6 +3009,9 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         // function, and `bg`/`delta` are only refreshed by the stage just above.
         if (MealKnownGate.armFromNote(preferences, dateUtil.now(), therapy.mealKnownStartMs)) {
             consoleLog.add("🍽️ MEAL_KNOWN: armed by the eating note")
+            if (MealConfirmationGate.clearDenialForDeclaredMeal(preferences, dateUtil.now())) {
+                consoleLog.add("🍽️ MEAL_CONFIRM: suppression released — meal declared by the button")
+            }
         }
 
         // 🍽️ The user's own prebolus is the meal declaration: no button, no carb count.
@@ -3024,6 +3027,9 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 "🍽️ MEAL_KNOWN: armed by manual bolus ${"%.2f".format(Locale.US, armed.amount)}U " +
                     "at bg=${bg.toInt()} delta=${"%.1f".format(Locale.US, delta)}"
             )
+            if (MealConfirmationGate.clearDenialForDeclaredMeal(preferences, dateUtil.now())) {
+                consoleLog.add("🍽️ MEAL_CONFIRM: suppression released — meal declared by prebolus")
+            }
         }
 
         // Second rise of the same meal. Worked out every tick, applied only when the key is on.
