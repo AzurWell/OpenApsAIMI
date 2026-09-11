@@ -11080,6 +11080,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             mealCertainty = lastMealCertainty,
             trunkGlobalState = lastPhysiologicalTreeSnapshot?.trunk?.globalState,
             mealConfirmedEarlyReleaseEnabled = preferences.get(BooleanKey.OApsAIMIMealConfirmedEarlyRelease),
+            mealDeclaredByUser = MealKnownGate.isMealKnown(preferences, dateUtil.now()),
             combinedDeltaMgdl5m = delta.toDouble(),
             targetBgMgdl = targetBgMgdl,
             iobU = iob.toDouble(),
