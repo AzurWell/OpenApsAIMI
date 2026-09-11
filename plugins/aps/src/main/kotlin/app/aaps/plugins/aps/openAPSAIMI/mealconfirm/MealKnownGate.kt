@@ -30,7 +30,7 @@ object MealKnownGate {
     const val MEAL_WINDOW_MIN = 180L
 
     /** Under this, a bolus is a correction or an SMB, not a meal prebolus. */
-    const val MANUAL_BOLUS_MEAL_THRESHOLD_U = 0.8
+    const val MANUAL_BOLUS_MEAL_THRESHOLD_U = MealConfirmationGate.MANUAL_BOLUS_MEAL_THRESHOLD_U
 
     /**
      * A prebolus is given near normal glucose, before the rise. A correction is given high.
