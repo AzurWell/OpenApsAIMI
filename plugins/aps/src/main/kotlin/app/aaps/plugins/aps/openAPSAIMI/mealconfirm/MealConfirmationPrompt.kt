@@ -66,14 +66,29 @@ object MealConfirmationPrompt {
             aggressiveMealDosing = MealConfirmationGate.isAggressiveMealDosing(smbLast30MinU, deltaMgdl),
             mealAlreadyKnown = MealKnownGate.isMealKnown(preferences, now),
         )
-        if (!allowed) return false
+        // Silence answered with noise: the banner went unseen and AIMI kept dosing.
+        val escalate = MealConfirmationGate.shouldEscalate(
+            preferences = preferences,
+            now = now,
+            smbLast30MinU = smbLast30MinU,
+            deltaMgdl = deltaMgdl,
+            declaredCobG = declaredCobG,
+            recentManualBolusU = manualBolusU,
+            mealAlreadyKnown = MealKnownGate.isMealKnown(preferences, now),
+        )
+        if (!allowed && !escalate) return false
 
         val bgText = String.format(Locale.US, "%.0f", bgMgdl)
         notificationManager.post(
             id = NotificationId.AIMI_MEAL_CONFIRMATION,
-            text = context.getString(R.string.aimi_meal_confirm_notification, bgText),
-            level = NotificationLevel.NORMAL,
+            text = context.getString(
+                if (escalate) R.string.aimi_meal_confirm_notification_loud else R.string.aimi_meal_confirm_notification,
+                bgText,
+                String.format(Locale.US, "%.1f", smbLast30MinU),
+            ),
+            level = if (escalate) NotificationLevel.URGENT else NotificationLevel.NORMAL,
             validMinutes = VALID_MINUTES,
+            soundRes = if (escalate) app.aaps.core.ui.R.raw.alarm else null,
             actions = listOf(
                 NotificationAction(R.string.aimi_meal_confirm_action_not_eating) {
                     answer(notificationManager, preferences, eating = false, onAnswer = onAnswer)
@@ -85,7 +100,8 @@ object MealConfirmationPrompt {
             // The banner is pointless once the user has already answered.
             validityCheck = { !MealConfirmationGate.isMealSuppressedByUser(preferences, System.currentTimeMillis()) },
         )
-        MealConfirmationGate.markPromptShown(preferences, now)
+        if (escalate) MealConfirmationGate.markEscalated(preferences, now)
+        else MealConfirmationGate.markPromptShown(preferences, now)
         return true
     }
 
