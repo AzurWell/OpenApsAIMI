@@ -37,8 +37,16 @@ object MealConfirmationGate {
      */
     const val MANUAL_BOLUS_LOOKBACK_MIN = 45L
 
-    /** Below this, a bolus is a correction/SMB artefact rather than a meal bolus. */
-    const val MANUAL_BOLUS_MEAL_THRESHOLD_U = 0.8
+    /**
+     * Below this, a manual bolus is not read as a meal.
+     *
+     * SMBs are already excluded by type ([app.aaps.core.data.model.BS.Type.NORMAL] only), so the
+     * only thing this threshold keeps out is a micro-correction typed by hand. The user this was
+     * written for gives round doses of 2-3 U and almost never eats without carbs, so 0.8 U was
+     * rejecting the small deliberate bolus they use to say "I am starting a meal". Lowered to 0.5 U
+     * on 2026-09-11 at their request.
+     */
+    const val MANUAL_BOLUS_MEAL_THRESHOLD_U = 0.5
 
     /**
      * How long an explicit "I am eating" keeps the prompt quiet.
@@ -117,6 +125,22 @@ object MealConfirmationGate {
         if (!evidence) return false
         preferences.put(AimiLongKey.MealDeniedUntil, 0L)
         // The user is eating after all: stay quiet for the meal instead of asking again at once.
+        preferences.put(AimiLongKey.MealPromptQuietUntil, now + MEAL_CONFIRMED_QUIET_MIN * MIN_MS)
+        return true
+    }
+
+    /**
+     * A meal declared through [MealKnownGate] — the button or the user's own prebolus — overrides an
+     * earlier "I am not eating", exactly like [clearIfMealEvidence] does for a bolus.
+     *
+     * Without this the two declarations contradict each other and the older one wins: pressing the
+     * button would open a meal window while the undeclared-carb estimator stayed gated.
+     *
+     * @return true when an active suppression was cleared by this call.
+     */
+    fun clearDenialForDeclaredMeal(preferences: Preferences, now: Long): Boolean {
+        if (!isMealSuppressedByUser(preferences, now)) return false
+        preferences.put(AimiLongKey.MealDeniedUntil, 0L)
         preferences.put(AimiLongKey.MealPromptQuietUntil, now + MEAL_CONFIRMED_QUIET_MIN * MIN_MS)
         return true
     }
