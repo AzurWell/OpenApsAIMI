@@ -37,5 +37,7 @@ enum class AimiLongKey(
     /** Timestamp of the last "eating" note already used, so one note arms at most once. */
     MealKnownLastNoteMs("oa_aimi_meal_known_last_note_ms", 0L),
     /** Lowest glucose (mg/dL) seen since the meal was declared. 0 = nothing recorded yet. */
-    MealKnownBgMinMgdl("oa_aimi_meal_known_bg_min_mgdl", 0L)
+    MealKnownBgMinMgdl("oa_aimi_meal_known_bg_min_mgdl", 0L),
+    /** Last time the silent prompt was escalated to an audible alarm. */
+    MealPromptEscalatedAt("oa_aimi_meal_prompt_escalated_at_ms", 0L)
 }
