@@ -114,7 +114,10 @@ object MealKnownGate {
         preferences.put(AimiLongKey.MealKnownLastBolusMs, candidate.timestamp)
         if (!looksLikeMealBolus(bgMgdl, deltaMgdl)) return null
 
-        arm(preferences, now)
+        // The meal started when the bolus was given, not when the tick noticed it. Normally one or
+        // two ticks apart; after an install or a restart the bolus can be much older, and anchoring
+        // on it is what keeps the second-rise elapsed time honest instead of restarting the clock.
+        arm(preferences, candidate.timestamp.coerceAtMost(now))
         return candidate
     }
 
