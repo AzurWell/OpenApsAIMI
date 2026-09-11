@@ -211,6 +211,27 @@ class NsIncomingDataProcessor @Inject constructor(
 
                                 // Check for AIMI Context sync
                                 val note = therapyEvent.note ?: ""
+                                // Format: AIMI_CONTEXT_CANCEL:<id|ALL>:PIN:<pin>
+                                // The coach app sends this when the ride is over. Without it a
+                                // context stays active until its own end time, even though the
+                                // user already stopped moving.
+                                if (note.startsWith("AIMI_CONTEXT_CANCEL:")) {
+                                    aapsLogger.info(LTag.NSCLIENT, "[NS] AIMI_CONTEXT_CANCEL detected: ${note.take(60)}")
+                                    try {
+                                        val cancel = Regex("^AIMI_CONTEXT_CANCEL:([^:]+):PIN:([^:]*)$").matchEntire(note)
+                                        if (cancel != null) {
+                                            val removed = contextManager.cancelContextFromNS(
+                                                cancel.groupValues[1],
+                                                cancel.groupValues[2]
+                                            )
+                                            aapsLogger.info(LTag.NSCLIENT, "[NS] AIMI context cancel removed $removed intent(s)")
+                                        } else {
+                                            aapsLogger.warn(LTag.NSCLIENT, "[NS] AIMI cancel note wrong format")
+                                        }
+                                    } catch (e: Exception) {
+                                        aapsLogger.error(LTag.NSCLIENT, "[NS] Exception parsing AIMI cancel: ${e.message}", e)
+                                    }
+                                }
                                 if (note.startsWith("AIMI_CONTEXT:")) {
                                     aapsLogger.info(LTag.NSCLIENT, "[NS] ✅ AIMI_CONTEXT detected: ${note.take(60)}...")
                                     try {
