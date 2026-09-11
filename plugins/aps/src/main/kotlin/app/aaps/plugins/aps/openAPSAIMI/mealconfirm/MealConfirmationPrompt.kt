@@ -32,6 +32,9 @@ object MealConfirmationPrompt {
      *   effort is adrenaline, not food, and SMBs are already off, so the question would only be
      *   noise — and a "no" would burn a 120 min window that runs after the sport, when the user
      *   may really be eating.
+     * @param smbLast30MinU SMB delivered over the last 30 minutes — the second trigger, for the
+     *   rise AIMI doses like a meal without ever labelling it one.
+     * @param deltaMgdl short delta now, used by that second trigger.
      * @param onAnswer optional hook invoked with the user's answer, for learning/telemetry.
      * @return true when a prompt was actually raised on this tick.
      */
@@ -45,6 +48,8 @@ object MealConfirmationPrompt {
         bgMgdl: Double,
         recentBoluses: List<BS> = emptyList(),
         exerciseLockoutActive: Boolean = false,
+        smbLast30MinU: Double = 0.0,
+        deltaMgdl: Double = 0.0,
         onAnswer: ((eating: Boolean) -> Unit)? = null,
     ): Boolean {
         if (exerciseLockoutActive) return false
@@ -58,6 +63,8 @@ object MealConfirmationPrompt {
             mealInterpretationActive = mealInterpretationActive,
             declaredCobG = declaredCobG,
             recentManualBolusU = manualBolusU,
+            aggressiveMealDosing = MealConfirmationGate.isAggressiveMealDosing(smbLast30MinU, deltaMgdl),
+            mealAlreadyKnown = MealKnownGate.isMealKnown(preferences, now),
         )
         if (!allowed) return false
 
