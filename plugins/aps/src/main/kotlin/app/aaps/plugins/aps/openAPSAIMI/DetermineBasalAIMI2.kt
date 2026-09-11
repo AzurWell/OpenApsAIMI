@@ -2024,12 +2024,38 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     private val bolusQueryCache = mutableMapOf<Pair<Long, Boolean>, List<BS>>()
 
     /**
+     * Boluses of the last [MealKnownGate.MEAL_WINDOW_MIN] minutes, read once per tick, synchronously.
+     *
+     * Deliberately **not** [getBolusesFromTimeCached]: that helper returns a snapshot refreshed in
+     * the background by whichever caller ran first, so it is empty on the first ticks after a
+     * restart and only ever as deep as the narrowest window any caller asked for (30 min in
+     * places). The meal gates use it to decide whether the user already bolused for this meal — a
+     * bolus missing from that list raises the prompt in the middle of a real meal and makes the
+     * second-rise budget count too little insulin.
+     */
+    private var mealGateBolusesThisTick: List<BS>? = null
+
+    /** @see mealGateBolusesThisTick */
+    private fun mealGateBoluses(now: Long): List<BS> =
+        mealGateBolusesThisTick ?: (
+            try {
+                runBlocking {
+                    persistenceLayer.getBolusesFromTime(now - MealKnownGate.MEAL_WINDOW_MIN * 60_000L, true)
+                }
+            } catch (e: Exception) {
+                consoleError.add("🍽️ MEAL_GATES: bolus read failed (${e.message}) — gates stay silent this tick")
+                emptyList()
+            }
+            ).also { mealGateBolusesThisTick = it }
+
+    /**
      * Phase 2: early orchestration — cache lifecycle, telemetry pulse, meal hydration,
      * advisor/TDD bootstrap, profile snapshot, BOOTSTRAP phase marker.
      */
     private fun runEarlyDetermineBasalStages(ctx: AimiTickContext): AimiDetermineBasalEarlyTickState {
         determineBasalInvocationCaches.beginInvocation()
         bolusQueryCache.clear()
+        mealGateBolusesThisTick = null
         consoleError = mutableListOf()
         consoleLog = mutableListOf()
         if (::aapsLogger.isInitialized) {
@@ -2990,10 +3016,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         MealKnownGate.armFromManualBolus(
             preferences = preferences,
             now = dateUtil.now(),
-            boluses = getBolusesFromTimeCached(
-                dateUtil.now() - MealKnownGate.MEAL_WINDOW_MIN * 60_000L,
-                true,
-            ),
+            boluses = mealGateBoluses(dateUtil.now()),
             bgMgdl = bg,
             deltaMgdl = delta.toDouble(),
         )?.let { armed ->
@@ -12668,9 +12691,10 @@ class DetermineBasalaimiSMB2 @Inject constructor(
      * Returns 0 when no meal is known.
      */
     private fun smbDeliveredSinceMealArmU(): Double {
-        val elapsedMs = MealKnownGate.elapsedSinceArmMs(preferences, dateUtil.now()) ?: return 0.0
-        return getBolusesFromTimeCached(dateUtil.now() - elapsedMs, true)
-            .filter { it.isValid && it.type == BS.Type.SMB }
+        val now = dateUtil.now()
+        val elapsedMs = MealKnownGate.elapsedSinceArmMs(preferences, now) ?: return 0.0
+        return mealGateBoluses(now)
+            .filter { it.isValid && it.type == BS.Type.SMB && it.timestamp >= now - elapsedMs }
             .sumOf { it.amount }
     }
 
@@ -17511,10 +17535,12 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         if (MealConfirmationGate.clearIfMealEvidence(
                 preferences = preferences,
                 now = dateUtil.now(),
-                recentManualBolusU = getBolusesFromTimeCached(
-                    dateUtil.now() - MealConfirmationGate.MANUAL_BOLUS_LOOKBACK_MIN * 60_000L,
-                    true,
-                ).filter { it.isValid && it.type == BS.Type.NORMAL }.sumOf { it.amount },
+                recentManualBolusU = mealGateBoluses(dateUtil.now())
+                    .filter {
+                        it.isValid && it.type == BS.Type.NORMAL &&
+                            it.timestamp >= dateUtil.now() - MealConfirmationGate.MANUAL_BOLUS_LOOKBACK_MIN * 60_000L
+                    }
+                    .sumOf { it.amount },
                 declaredCobG = ctx.mealData.mealCOB,
             )
         ) {
@@ -18215,10 +18241,9 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             mealInterpretationActive = lastPhysiologicalPhaseOutput?.phase?.isMealRisk == true,
             declaredCobG = ctx.mealData.mealCOB,
             bgMgdl = glucoseStatus.glucose,
-            recentBoluses = getBolusesFromTimeCached(
-                dateUtil.now() - MealConfirmationGate.MANUAL_BOLUS_LOOKBACK_MIN * 60_000L,
-                true,
-            ),
+            recentBoluses = mealGateBoluses(dateUtil.now()).filter {
+                it.timestamp >= dateUtil.now() - MealConfirmationGate.MANUAL_BOLUS_LOOKBACK_MIN * 60_000L
+            },
             exerciseLockoutActive = exerciseInsulinLockoutActive,
             onAnswer = { eating -> consoleLog.add("🙅 MEAL_CONFIRM: user answered eating=$eating") },
         )
