@@ -44,6 +44,18 @@ object DecisionPredictionAuthorityResolver {
     private const val MCER_RISE_DELTA_MIN_MGDL = 1.2
     /** BG must be at least target + this margin (mg/dL) before releasing the floor. */
     private const val MCER_BG_MARGIN_MGDL = 20.0
+
+    /**
+     * The same margin once the user has **declared** the meal (MealKnownGate: the button, or their
+     * own prebolus).
+     *
+     * The 20 mg/dL margin pays for the uncertainty of an inferred meal: the loop waits for the rise
+     * to prove itself before releasing the floor. A declaration removes that uncertainty, and the
+     * wait then costs the peak. Measured on 2026-09-11: the user declared lunch with a 2 U bolus at
+     * 14:46 with glucose at 97 and rising 5.8 mg/dL per 5 min, and MCER logged
+     * `OFF(near_target)` — every other condition was satisfied, only `bg >= target + 20` failed.
+     */
+    private const val MCER_BG_MARGIN_DECLARED_MGDL = 10.0
     /** Meal-compatible / causal-meal confidence required when tree/priority evidence is absent. */
     private const val MCER_STRONG_MEAL_PROB = 0.80
     /** Tail circuit-breaker: revert to the insulin-only floor once IOB headroom (maxIOB − IOB) drops here. */
@@ -66,6 +78,8 @@ object DecisionPredictionAuthorityResolver {
         mealCertainty: MealCertainty? = null,
         trunkGlobalState: GlobalPhysiologicalState? = null,
         mealConfirmedEarlyReleaseEnabled: Boolean = false,
+        /** The user declared this meal — see MealKnownGate. Strongest confirmation there is. */
+        mealDeclaredByUser: Boolean = false,
         combinedDeltaMgdl5m: Double = 0.0,
         targetBgMgdl: Double = 100.0,
         iobU: Double = 0.0,
@@ -166,9 +180,11 @@ object DecisionPredictionAuthorityResolver {
         if (mealConfirmedEarlyReleaseEnabled) {
             val scenarioBestPathMin = scenarioProjection?.scenarioBest?.pathMinMgdl ?: scenarioBest
             val rising = combinedDeltaMgdl5m >= MCER_RISE_DELTA_MIN_MGDL
-            val aboveTarget = bgMgdl >= targetBgMgdl + MCER_BG_MARGIN_MGDL
+            val bgMargin = if (mealDeclaredByUser) MCER_BG_MARGIN_DECLARED_MGDL else MCER_BG_MARGIN_MGDL
+            val aboveTarget = bgMgdl >= targetBgMgdl + bgMargin
             val strongMealConfirmed =
-                treeMealEvidence ||
+                mealDeclaredByUser ||
+                    treeMealEvidence ||
                     mealDeliveryPriority ||
                     mealAbsorptionOutput?.phase?.forcesHtrRise == true ||
                     mealCompatibleProb >= MCER_STRONG_MEAL_PROB ||
@@ -184,7 +200,7 @@ object DecisionPredictionAuthorityResolver {
             val armed = rising && aboveTarget && strongMealConfirmed && !tailBreaker && !sovereignHypoBlock
             if (armed && scenarioBestPathMin.isFinite() && scenarioBestPathMin > predTerminal) {
                 predTerminal = scenarioBestPathMin
-                mcerSuffix = " | MCER=ARMED release->${scenarioBestPathMin.toInt()}"
+                mcerSuffix = " | MCER=ARMED${if (mealDeclaredByUser) "(declared)" else ""} release->${scenarioBestPathMin.toInt()}"
             } else {
                 val offTag = when {
                     tailBreaker        -> if (tailByPhase) "tail_phase" else if (tailByIob) "tail_iob" else "tail_fall"
