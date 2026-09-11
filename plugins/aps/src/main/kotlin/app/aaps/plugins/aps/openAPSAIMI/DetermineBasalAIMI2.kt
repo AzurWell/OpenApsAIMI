@@ -11235,6 +11235,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             mealCertainty = lastMealCertainty,
             trunkGlobalState = lastPhysiologicalTreeSnapshot?.trunk?.globalState,
             mealConfirmedEarlyReleaseEnabled = preferences.get(BooleanKey.OApsAIMIMealConfirmedEarlyRelease),
+            mealDeclaredByUser = MealKnownGate.isMealKnown(preferences, dateUtil.now()),
             // The smoothed combined delta, not the raw 5-minute one. The parameter has always been
             // named for the combined signal; passing the raw delta let a single sensor step of +24
             // satisfy the "rising" test and clear the "falling" breaker on the same tick.
