@@ -86,8 +86,13 @@ object MealConfirmationGate {
      * unseen, and AIMI went on to give 1.70 U and two spells of 6 U/h basal into a rise that had no
      * food behind it. Three more expired unanswered during the night before that.
      *
-     * So silence is answered with noise, once, when the dose crosses the point where the user
-     * would want to be woken. Below it the banner stays quiet.
+     * Above it the banner is re-posted once with the amount in its text, at
+     * [app.aaps.core.interfaces.notifications.NotificationLevel.IMPORTANT] so it sits at the top of
+     * the list. **No sound**: the user asked explicitly for none ("c'est le genre de truc qui me
+     * gave"), and an alarm they resent is an alarm they would turn off.
+     *
+     * Which means this cannot be the answer to the unseen banner on its own — see the deliberate
+     * lack of a quiet-hour check below, and the open question of what silence should mean.
      */
     const val AGGRESSIVE_SMB_ESCALATE_U = 1.5
 
@@ -235,9 +240,9 @@ object MealConfirmationGate {
     /**
      * Whether the unanswered prompt should now be escalated to an audible alarm.
      *
-     * Deliberately **not** subject to [isQuietHour]: the night window exists because a silent
-     * banner at 03:00 is useless, not because the user would rather sleep through AIMI putting
-     * 1.5 U into a rise. That is precisely when being woken is worth it.
+     * Deliberately **not** subject to [isQuietHour]: the night window exists because a banner at
+     * 03:00 is useless, and a second banner costs nothing. It will not wake anyone — it is there so
+     * the morning shows what happened.
      *
      * Any answer — or a bolus, or the button — puts the state into suppression or quiet, and both
      * stop this.
