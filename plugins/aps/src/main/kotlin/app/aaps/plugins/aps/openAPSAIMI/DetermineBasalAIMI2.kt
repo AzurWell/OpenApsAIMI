@@ -3036,6 +3036,18 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             deltaMgdl = delta.toDouble(),
             smbDeliveredSinceArmU = smbDeliveredSinceMealArmU(),
         )
+
+        // Reported here and not at the end of the tick: a safety halt (LGS), a T3c bypass or the
+        // exercise lockout all return before that point, and those are exactly the ticks where the
+        // meal state is worth seeing. `rT.reason` is what reaches Nightscout.
+        consoleLog.add(MealConfirmationGate.statusLine(preferences, dateUtil.now()))
+        consoleLog.add(MealKnownGate.statusLine(preferences, dateUtil.now()))
+        rT.reason.append(MealConfirmationGate.statusLine(preferences, dateUtil.now())).append(" ")
+        rT.reason.append(MealKnownGate.statusLine(preferences, dateUtil.now())).append(" ")
+        if (lastSecondWaveVerdict.active) {
+            consoleLog.add("🌊 SECOND_WAVE: ${lastSecondWaveVerdict.reason}")
+            rT.reason.append("🌊secondWave ").append(lastSecondWaveVerdict.reason).append(" ")
+        }
         this.acceleratingUp = if (delta > 2 && delta - longAvgDelta > 2) 1 else 0
         this.decceleratingUp = if (delta > 0 && (delta < shortAvgDelta || delta < longAvgDelta)) 1 else 0
         this.acceleratingDown = if (delta < -2 && delta - longAvgDelta < -2) 1 else 0
@@ -18257,16 +18269,6 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             deltaMgdl = glucoseStatus.delta,
             onAnswer = { eating -> consoleLog.add("🙅 MEAL_CONFIRM: user answered eating=$eating") },
         )
-        consoleLog.add(MealConfirmationGate.statusLine(preferences, dateUtil.now()))
-        consoleLog.add(MealKnownGate.statusLine(preferences, dateUtil.now()))
-        // rT.reason is what reaches Nightscout, so the meal state can be followed remotely.
-        rT.reason.append(MealConfirmationGate.statusLine(preferences, dateUtil.now())).append(" ")
-        rT.reason.append(MealKnownGate.statusLine(preferences, dateUtil.now())).append(" ")
-        if (lastSecondWaveVerdict.active) {
-            consoleLog.add("🌊 SECOND_WAVE: ${lastSecondWaveVerdict.reason}")
-            rT.reason.append("🌊secondWave ").append(lastSecondWaveVerdict.reason).append(" ")
-        }
-
         // BasalDecisionEngine: [targetBg] = membre instance (objectif loop / temp target), pas le local [target_bg] (bande schedule) — même contrat qu’avant extraction orchestration.
         val basalDecision = runBasalDecisionEngineDecideStage(
             AimiBasalDecisionEngineStageBundle(
