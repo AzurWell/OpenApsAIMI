@@ -78,6 +78,23 @@ object MealConfirmationGate {
     const val AGGRESSIVE_MIN_DELTA_MGDL = 2.0
 
     /**
+     * Above this much SMB into one carb-free rise, the prompt stops being silent.
+     *
+     * The banner only works if somebody is looking at the phone, and the cases where it matters are
+     * exactly the ones where nobody is: when the user is eating they are attentive, when they are
+     * *not* eating they have no reason to check. On 2026-09-11 at 21:08 the prompt was raised, went
+     * unseen, and AIMI went on to give 1.70 U and two spells of 6 U/h basal into a rise that had no
+     * food behind it. Three more expired unanswered during the night before that.
+     *
+     * So silence is answered with noise, once, when the dose crosses the point where the user
+     * would want to be woken. Below it the banner stays quiet.
+     */
+    const val AGGRESSIVE_SMB_ESCALATE_U = 1.5
+
+    /** One audible alarm per episode at most. */
+    const val ESCALATION_COOLDOWN_MIN = 60L
+
+    /**
      * Hours when the prompt stays down (local time, start inclusive, end exclusive).
      *
      * Three prompts fired during the night of 2026-09-11 and all three expired unanswered — the
@@ -213,6 +230,42 @@ object MealConfirmationGate {
         if (isMealSuppressedByUser(preferences, now)) return false
         val lastShown = preferences.get(AimiLongKey.MealPromptLastShown)
         return now - lastShown >= PROMPT_COOLDOWN_MIN * MIN_MS
+    }
+
+    /**
+     * Whether the unanswered prompt should now be escalated to an audible alarm.
+     *
+     * Deliberately **not** subject to [isQuietHour]: the night window exists because a silent
+     * banner at 03:00 is useless, not because the user would rather sleep through AIMI putting
+     * 1.5 U into a rise. That is precisely when being woken is worth it.
+     *
+     * Any answer — or a bolus, or the button — puts the state into suppression or quiet, and both
+     * stop this.
+     */
+    fun shouldEscalate(
+        preferences: Preferences,
+        now: Long,
+        smbLast30MinU: Double,
+        deltaMgdl: Double,
+        declaredCobG: Double,
+        recentManualBolusU: Double = 0.0,
+        mealAlreadyKnown: Boolean = false,
+    ): Boolean {
+        if (smbLast30MinU < AGGRESSIVE_SMB_ESCALATE_U) return false
+        if (deltaMgdl < AGGRESSIVE_MIN_DELTA_MGDL) return false
+        if (declaredCobG > 0.0) return false
+        if (mealAlreadyKnown) return false
+        if (recentManualBolusU >= MANUAL_BOLUS_MEAL_THRESHOLD_U) return false
+        if (isMealSuppressedByUser(preferences, now)) return false
+        if (now < preferences.get(AimiLongKey.MealPromptQuietUntil)) return false
+        val last = preferences.get(AimiLongKey.MealPromptEscalatedAt)
+        return now - last >= ESCALATION_COOLDOWN_MIN * MIN_MS
+    }
+
+    /** Marks the audible alarm as fired, so one episode wakes the user once. */
+    fun markEscalated(preferences: Preferences, now: Long) {
+        preferences.put(AimiLongKey.MealPromptEscalatedAt, now)
+        preferences.put(AimiLongKey.MealPromptLastShown, now)
     }
 
     /** Marks a prompt as raised, so the cooldown starts even if the user never answers. */
