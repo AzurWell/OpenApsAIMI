@@ -2024,7 +2024,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     private val bolusQueryCache = mutableMapOf<Pair<Long, Boolean>, List<BS>>()
 
     /**
-     * Boluses of the last [MealKnownGate.MEAL_WINDOW_MIN] minutes, read once per tick, synchronously.
+     * Boluses of the last [SecondWaveGate.MAX_ELAPSED_MIN] minutes, read once per tick, synchronously.
      *
      * Deliberately **not** [getBolusesFromTimeCached]: that helper returns a snapshot refreshed in
      * the background by whichever caller ran first, so it is empty on the first ticks after a
@@ -2040,7 +2040,9 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         mealGateBolusesThisTick ?: (
             try {
                 runBlocking {
-                    persistenceLayer.getBolusesFromTime(now - MealKnownGate.MEAL_WINDOW_MIN * 60_000L, true)
+                    // Widest window any meal gate needs: the second-rise budget counts SMB over the
+                    // whole meal, which runs past MealKnownGate's own 3 h window.
+                    persistenceLayer.getBolusesFromTime(now - SecondWaveGate.MAX_ELAPSED_MIN * 60_000L, true)
                 }
             } catch (e: Exception) {
                 consoleError.add("🍽️ MEAL_GATES: bolus read failed (${e.message}) — gates stay silent this tick")
@@ -3032,6 +3034,11 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             }
         }
 
+        // Lowest glucose since the meal was declared — the shape test of the second-rise gate.
+        if (MealKnownGate.msSinceArm(preferences, dateUtil.now()) != null) {
+            MealKnownGate.trackBg(preferences, bg)
+        }
+
         // Second rise of the same meal. Worked out every tick, applied only when the key is on.
         lastSecondWaveVerdict = SecondWaveGate.evaluate(
             preferences = preferences,
@@ -3041,6 +3048,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             bgMgdl = bg,
             deltaMgdl = delta.toDouble(),
             smbDeliveredSinceArmU = smbDeliveredSinceMealArmU(),
+            bgMinSinceArmMgdl = MealKnownGate.bgMinSinceArm(preferences),
         )
 
         // Reported here and not at the end of the tick: a safety halt (LGS), a T3c bypass or the
@@ -12719,7 +12727,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
      */
     private fun smbDeliveredSinceMealArmU(): Double {
         val now = dateUtil.now()
-        val elapsedMs = MealKnownGate.elapsedSinceArmMs(preferences, now) ?: return 0.0
+        val elapsedMs = MealKnownGate.msSinceArm(preferences, now) ?: return 0.0
         return mealGateBoluses(now)
             .filter { it.isValid && it.type == BS.Type.SMB && it.timestamp >= now - elapsedMs }
             .sumOf { it.amount }

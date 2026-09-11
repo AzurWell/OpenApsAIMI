@@ -62,6 +62,20 @@ object MealKnownGate {
         return if (now < until) (until - now + MIN_MS - 1) / MIN_MS else 0L
     }
 
+    /**
+     * Milliseconds since the window was opened, **even after the window itself has closed**.
+     *
+     * [elapsedSinceArmMs] stops at [MEAL_WINDOW_MIN], because "is a meal running?" is a 3 h
+     * question. The second rise of a slow meal is not: the pasta lunch of 2026-09-11 was still
+     * climbing at t+2h20, and a gate reading [elapsedSinceArmMs] goes blind at t+3h — one hour of
+     * coverage for a rise that can run to t+5h. Callers that follow the meal's own clock use this
+     * and set their own horizon.
+     */
+    fun msSinceArm(preferences: Preferences, now: Long): Long? {
+        val armedAt = preferences.get(AimiLongKey.MealKnownArmedAt)
+        return if (armedAt > 0L && now >= armedAt) now - armedAt else null
+    }
+
     /** Milliseconds since the window was opened, or null when no meal is known. */
     fun elapsedSinceArmMs(preferences: Preferences, now: Long): Long? {
         if (!isMealKnown(preferences, now)) return null
@@ -73,12 +87,33 @@ object MealKnownGate {
     fun arm(preferences: Preferences, now: Long) {
         preferences.put(AimiLongKey.MealKnownUntil, now + MEAL_WINDOW_MIN * MIN_MS)
         preferences.put(AimiLongKey.MealKnownArmedAt, now)
+        // A new meal starts a new glucose history; [trackBg] fills it from the next tick.
+        preferences.put(AimiLongKey.MealKnownBgMinMgdl, 0L)
     }
+
+    /**
+     * Records the lowest glucose seen since the meal was declared. Called once per tick.
+     *
+     * This is what tells a second rise from a meal that simply never came down. A second rise goes
+     * peak → trough → up again; a baguette with cheese sits at 250 for six hours and needs insulin
+     * the whole way. Only the trough separates them.
+     */
+    fun trackBg(preferences: Preferences, bgMgdl: Double) {
+        if (!bgMgdl.isFinite() || bgMgdl <= 0.0) return
+        val current = preferences.get(AimiLongKey.MealKnownBgMinMgdl)
+        val value = bgMgdl.toLong()
+        if (current <= 0L || value < current) preferences.put(AimiLongKey.MealKnownBgMinMgdl, value)
+    }
+
+    /** Lowest glucose since the meal was declared, or null when nothing was recorded yet. */
+    fun bgMinSinceArm(preferences: Preferences): Double? =
+        preferences.get(AimiLongKey.MealKnownBgMinMgdl).takeIf { it > 0L }?.toDouble()
 
     /** Closes the window, for example when the user says they are not eating after all. */
     fun clear(preferences: Preferences) {
         preferences.put(AimiLongKey.MealKnownUntil, 0L)
         preferences.put(AimiLongKey.MealKnownArmedAt, 0L)
+        preferences.put(AimiLongKey.MealKnownBgMinMgdl, 0L)
     }
 
     /**
