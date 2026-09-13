@@ -139,7 +139,16 @@ class MaintenanceImpl @Inject constructor(
                 && (name.endsWith(".log")
                 || name.endsWith(".zip") && !name.endsWith(loggerUtils.suffix)))
         } ?: emptyArray()
-        Arrays.sort(files) { f1: File, f2: File -> f2.name.compareTo(f1.name) }
+        // Newest first by modification time, not by name. The rotated files are named
+        // AndroidAPS._<date>_<time>_.<i>.zip, and a name sort compares <i> as text, so ".9" sorts
+        // above ".13": asking for the 10 most recent logs shipped the small hours and dropped the
+        // three hours before the export. Measured 2026-09-13 on a real export — it held 01:23 to
+        // 08:28 plus 11:03, and lost 08:28-11:03 entirely, which was the window being looked for.
+        // Name stays as the tie-break so files sharing a timestamp keep a stable order.
+        Arrays.sort(files) { f1: File, f2: File ->
+            val byTime = f2.lastModified().compareTo(f1.lastModified())
+            if (byTime != 0) byTime else f2.name.compareTo(f1.name)
+        }
         val result = listOf(*files)
         val toIndex = if (amount > result.size) result.size else amount
 
