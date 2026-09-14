@@ -26,8 +26,28 @@ import app.aaps.plugins.aps.openAPSAIMI.keys.AimiLongKey
  */
 object MealKnownGate {
 
-    /** How long a meal stays "known" after it was declared. */
+    /**
+     * How long a meal stays "known" after it was declared — the **active** phase.
+     *
+     * This is what raises dosing authority (the early-release margin of `DecisionPredictionAuthority`)
+     * and what counts as a declared meal against the effort guard. It stays at three hours on
+     * purpose: nobody wants the loop still front-loading six hours after lunch.
+     */
     const val MEAL_WINDOW_MIN = 180L
+
+    /**
+     * How long the meal is still **absorbing** — much longer than the active phase.
+     *
+     * From the user this was written for: "quand je mange du pain et du fromage je m'aperçois que
+     * limite les 3/4 du pain arrive 3-4h après". The pasta lunch of 2026-09-11 produced five
+     * separate rises over seven hours. A meal that is still arriving is not a new meal, and a rise
+     * inside this window needs no question asked about it — on 2026-09-14 the prompt fired at t+3h20
+     * on the tail of a declared lunch, twenty minutes after [MEAL_WINDOW_MIN] expired, and the only
+     * honest answer to "are you eating?" was "no" while the rise was entirely food.
+     *
+     * Nothing here raises a dose. It only decides what the loop already knows about.
+     */
+    const val MEAL_TAIL_MIN = 360L
 
     /** Under this, a bolus is a correction or an SMB, not a meal prebolus. */
     const val MANUAL_BOLUS_MEAL_THRESHOLD_U = MealConfirmationGate.MANUAL_BOLUS_MEAL_THRESHOLD_U
@@ -51,6 +71,17 @@ object MealKnownGate {
     const val MEAL_FALLING_GUARD_BG_MGDL = 140.0
 
     private const val MIN_MS = 60_000L
+
+    /**
+     * True while a declared meal is still absorbing — see [MEAL_TAIL_MIN].
+     *
+     * Deliberately longer than [isMealKnown]: a rise in this window belongs to a meal the user has
+     * already told us about, so there is nothing to ask and nothing to re-declare.
+     */
+    fun isMealStillAbsorbing(preferences: Preferences, now: Long): Boolean {
+        val elapsed = msSinceArm(preferences, now) ?: return false
+        return elapsed < MEAL_TAIL_MIN * MIN_MS
+    }
 
     /** True while a declared meal is still seen as running. */
     fun isMealKnown(preferences: Preferences, now: Long): Boolean =

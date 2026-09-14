@@ -64,7 +64,7 @@ object MealConfirmationPrompt {
             declaredCobG = declaredCobG,
             recentManualBolusU = manualBolusU,
             aggressiveMealDosing = MealConfirmationGate.isAggressiveMealDosing(smbLast30MinU, deltaMgdl),
-            mealAlreadyKnown = MealKnownGate.isMealKnown(preferences, now),
+            mealAlreadyKnown = MealKnownGate.isMealStillAbsorbing(preferences, now),
         )
         // Silence answered with noise: the banner went unseen and AIMI kept dosing.
         val escalate = MealConfirmationGate.shouldEscalate(
@@ -74,7 +74,7 @@ object MealConfirmationPrompt {
             deltaMgdl = deltaMgdl,
             declaredCobG = declaredCobG,
             recentManualBolusU = manualBolusU,
-            mealAlreadyKnown = MealKnownGate.isMealKnown(preferences, now),
+            mealAlreadyKnown = MealKnownGate.isMealStillAbsorbing(preferences, now),
         )
         if (!allowed && !escalate) return false
 
