@@ -41,7 +41,7 @@ object SecondWaveGate {
      * that. Measured on 2026-09-11 — a pasta lunch at 14:46, glucose back up from 72 to 144 between
      * 15:47 and 17:02, still climbing at t+2h20 with the meal window 44 minutes from expiry.
      */
-    const val MAX_ELAPSED_MIN = 300L
+    const val MAX_ELAPSED_MIN = MealKnownGate.MEAL_TAIL_MIN
 
     /**
      * Under this, nothing is stacked yet, so there is nothing to protect against.
