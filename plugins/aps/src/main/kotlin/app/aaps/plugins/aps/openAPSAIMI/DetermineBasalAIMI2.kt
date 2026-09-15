@@ -3104,7 +3104,6 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             declaredCobG = ctx.mealData.mealCOB,
             bgMgdl = bg,
             deltaMgdl = delta.toDouble(),
-            smbDeliveredSinceArmU = smbDeliveredSinceMealArmU(),
             bgMinSinceArmMgdl = MealKnownGate.bgMinSinceArm(preferences),
         )
 
@@ -3115,9 +3114,9 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         consoleLog.add(MealKnownGate.statusLine(preferences, dateUtil.now()))
         rT.reason.append(MealConfirmationGate.statusLine(preferences, dateUtil.now())).append(" ")
         rT.reason.append(MealKnownGate.statusLine(preferences, dateUtil.now())).append(" ")
-        if (lastSecondWaveVerdict.active) {
-            consoleLog.add("🌊 SECOND_WAVE: ${lastSecondWaveVerdict.reason}")
-            rT.reason.append("🌊secondWave ").append(lastSecondWaveVerdict.reason).append(" ")
+        if (lastSecondWaveVerdict.reason != "idle") {
+            consoleLog.add("🌊 MEAL_TAIL: ${lastSecondWaveVerdict.reason}")
+            rT.reason.append("🌊 ").append(lastSecondWaveVerdict.reason).append(" ")
         }
         this.acceleratingUp = if (delta > 2 && delta - longAvgDelta > 2) 1 else 0
         this.decceleratingUp = if (delta > 0 && (delta < shortAvgDelta || delta < longAvgDelta)) 1 else 0
@@ -12934,17 +12933,6 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             .sumOf { it.amount }
     }
 
-    /**
-     * SMB units given since the meal window was opened, for the second-rise budget.
-     * Returns 0 when no meal is known.
-     */
-    private fun smbDeliveredSinceMealArmU(): Double {
-        val now = dateUtil.now()
-        val elapsedMs = MealKnownGate.msSinceArm(preferences, now) ?: return 0.0
-        return mealGateBoluses(now)
-            .filter { it.isValid && it.type == BS.Type.SMB && it.timestamp >= now - elapsedMs }
-            .sumOf { it.amount }
-    }
 
     private fun buildRecentPkpdBolusSamples(nowMillis: Long, fallbackWindowMin: Int): List<PkpdBolusSample> {
         val diaHours = preferences.get(DoubleKey.OApsAIMIPkpdStateDiaH).coerceIn(4.0, 8.0)
@@ -14357,14 +14345,15 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 // 🌊 Second rise of a meal that is already running. Reduction only, bolus channel
                 // only: the temporary basal keeps working. Off unless the user turned the key on.
                 if (preferences.get(BooleanKey.OApsAIMISecondWaveGuard)) {
-                    lastSecondWaveVerdict.ceilingU?.let { ceil ->
-                        if (finalUnits > ceil) {
+                    lastSecondWaveVerdict.factor?.let { factor ->
+                        val damped = finalUnits * factor
+                        if (damped < finalUnits) {
                             consoleLog.add(
-                                "🌊 SECOND_WAVE_CAP: ${"%.2f".format(Locale.US, finalUnits)}→" +
-                                    "${"%.2f".format(Locale.US, ceil)}U (${lastSecondWaveVerdict.reason})"
+                                "🌊 MEAL_TAIL_DAMP: ${"%.2f".format(Locale.US, finalUnits)}→" +
+                                    "${"%.2f".format(Locale.US, damped)}U (${lastSecondWaveVerdict.reason})"
                             )
-                            rT.reason.append("🌊secondWave cap${"%.2f".format(Locale.US, ceil)} ")
-                            finalUnits = ceil.coerceAtLeast(0.0)
+                            rT.reason.append("🌊tail×${"%.2f".format(Locale.US, factor)} ")
+                            finalUnits = damped.coerceAtLeast(0.0)
                         }
                     }
                 }
