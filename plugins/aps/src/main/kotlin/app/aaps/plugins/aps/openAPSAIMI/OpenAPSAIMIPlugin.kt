@@ -2383,6 +2383,7 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
                 add(BooleanKey.OApsAIMIEffortActivityProtection)
                 add(BooleanKey.OApsAIMIRiseCeilingGuard)
                 add(BooleanKey.OApsAIMISecondWaveGuard)
+                add(BooleanKey.OApsAIMIPredictionGapDamper)
                 add(DoubleKey.OApsAIMIautodrivesmallPrebolus)
                 add(DoubleKey.OApsAIMIautodrivePrebolus)
                 add(
