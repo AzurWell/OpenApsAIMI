@@ -397,6 +397,17 @@ enum class BooleanKey(
      * The verdict is worked out and exported on every tick even when this key is false, so the
      * effect can be measured before the feature is turned on.
      */
+    /**
+     * Opt-in: scale the bolus down when the loop's own insulin-only projection (`IOBpredBG`)
+     * already lands well below target. Reduction-only, bolus channel only — see
+     * [app.aaps.plugins.aps.openAPSAIMI.smb.PredictionGapDamper] for the measurement behind it.
+     */
+    OApsAIMIPredictionGapDamper(
+        key = "key_aimi_prediction_gap_damper",
+        defaultValue = false,
+        titleResId = R.string.pref_title_aimi_prediction_gap_damper,
+        summaryResId = R.string.pref_summary_aimi_prediction_gap_damper,
+    ),
     OApsAIMISecondWaveGuard(
         key = "key_aimi_second_wave_guard",
         defaultValue = false,
