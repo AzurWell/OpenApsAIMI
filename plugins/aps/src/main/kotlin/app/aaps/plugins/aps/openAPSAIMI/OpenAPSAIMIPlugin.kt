@@ -2387,6 +2387,7 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
                 add(DoubleKey.OApsAIMIAnticipBudgetU)
                 add(BooleanKey.OApsAIMIAnticipMealEvidence)
                 add(BooleanKey.OApsAIMISecondWaveGuard)
+                add(BooleanKey.OApsAIMIPredictionGapDamper)
                 add(DoubleKey.OApsAIMIautodrivesmallPrebolus)
                 add(DoubleKey.OApsAIMIautodrivePrebolus)
                 add(
