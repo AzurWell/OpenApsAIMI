@@ -34,6 +34,51 @@ class SecondWaveGateTest {
         assertThat(SecondWaveGate.looksLikeSecondRise(bgMgdl = 95.0, troughMgdl = 80.0)).isFalse()
     }
 
+    // -----------------------------------------------------------------------------------------
+    // Damping factor — by meal age
+    // -----------------------------------------------------------------------------------------
+
+    /** Before the gate opens, nothing is taken. */
+    @Test
+    fun nothingIsDampedBeforeTheGateOpens() {
+        assertThat(SecondWaveGate.dampingFactor(60)).isEqualTo(1.0)
+        assertThat(SecondWaveGate.dampingFactor(SecondWaveGate.MIN_ELAPSED_MIN)).isEqualTo(1.0)
+    }
+
+    /** At the far end of the meal, only the floor survives. */
+    @Test
+    fun theOldestTailKeepsOnlyTheFloor() {
+        assertThat(SecondWaveGate.dampingFactor(SecondWaveGate.MAX_ELAPSED_MIN))
+            .isEqualTo(SecondWaveGate.MIN_FACTOR)
+        assertThat(SecondWaveGate.dampingFactor(SecondWaveGate.MAX_ELAPSED_MIN + 120))
+            .isEqualTo(SecondWaveGate.MIN_FACTOR)
+    }
+
+    /** It only ever goes down with age, and never past the floor. */
+    @Test
+    fun theFactorDecreasesMonotonically() {
+        var previous = 1.1
+        for (minutes in 0L..(SecondWaveGate.MAX_ELAPSED_MIN + 60) step 15) {
+            val f = SecondWaveGate.dampingFactor(minutes)
+            assertThat(f).isAtMost(previous)
+            assertThat(f).isAtLeast(SecondWaveGate.MIN_FACTOR)
+            assertThat(f).isAtMost(1.0)
+            previous = f
+        }
+    }
+
+    /**
+     * The tail of 2026-09-14: the heaviest dosing ran from about t+2h30 to t+5h30 and put 6.65 U
+     * into a few grams of bread. Roughly half of that is what the damper is aiming to remove.
+     */
+    @Test
+    fun theBaguetteTailIsHalved() {
+        val early = SecondWaveGate.dampingFactor(150)
+        val late = SecondWaveGate.dampingFactor(330)
+        assertThat(early).isGreaterThan(late)
+        assertThat((early + late) / 2.0).isLessThan(0.75)
+    }
+
     /** The two edges, exactly on the limits. */
     @Test
     fun theEdges() {
