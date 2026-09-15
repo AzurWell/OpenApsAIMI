@@ -111,7 +111,7 @@ object SecondWaveGate {
     /**
      * Looks at one tick. This function writes nothing, so the verdict can be worked out and
      * exported on every tick even when the feature is off. That way the effect can be measured
-     * before it is turned on, the same way upstream ships `DescentRedoseGuard`.
+     * before it is turned on, the same way upstream ships `RiseCeilingGuard`.
      *
      * @param bgMinSinceArmMgdl lowest glucose since the meal was declared — see [TROUGH_MAX_MGDL].
      */

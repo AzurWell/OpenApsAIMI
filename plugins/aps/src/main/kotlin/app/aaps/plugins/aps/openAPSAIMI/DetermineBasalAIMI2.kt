@@ -70,6 +70,7 @@ import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationPrompt
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealKnownGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.SecondWaveGate
+import app.aaps.plugins.aps.openAPSAIMI.smb.PredictionGapDamper
 import app.aaps.plugins.aps.openAPSAIMI.ml.AimiSmbTrainer
 import app.aaps.plugins.aps.openAPSAIMI.ml.SmbRefinementFeatureSchema
 import app.aaps.plugins.aps.openAPSAIMI.ml.SmbTrainingRowBuffer
@@ -11763,6 +11764,12 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     private var lastContextSmbCeilingU: Double? = null
 
     /** Second-rise verdict of this tick. Worked out even when the feature is off (shadow mode). */
+    /** Terminal of the insulin-only prediction curve for this tick, for [PredictionGapDamper]. */
+    private var lastIobPredTerminalMgdl: Double? = null
+
+    /** Prediction-gap verdict of this tick. Worked out even when the feature is off (shadow mode). */
+    private var lastPredictionGapVerdict: PredictionGapDamper.Verdict = PredictionGapDamper.Verdict.INACTIVE
+
     private var lastSecondWaveVerdict: SecondWaveGate.Verdict = SecondWaveGate.Verdict.INACTIVE
 
     /** Hard context SMB-off (HypoRecovery); enforced robustly at [finalizeAndCapSMB]. Per-tick. */
@@ -14344,6 +14351,29 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 }
                 // 🌊 Second rise of a meal that is already running. Reduction only, bolus channel
                 // only: the temporary basal keeps working. Off unless the user turned the key on.
+                // 🪶 The loop's own insulin-only projection already lands below target: take a
+                // share off the bolus rather than betting on carbs that were never declared.
+                lastPredictionGapVerdict = PredictionGapDamper.evaluate(
+                    iobPredBgMgdl = lastIobPredTerminalMgdl,
+                    targetBgMgdl = targetBg.toDouble(),
+                )
+                if (lastPredictionGapVerdict.active) {
+                    consoleLog.add("🪶 PRED_GAP: ${lastPredictionGapVerdict.reason}")
+                    rT.reason.append("🪶 ").append(lastPredictionGapVerdict.reason).append(" ")
+                }
+                if (preferences.get(BooleanKey.OApsAIMIPredictionGapDamper)) {
+                    lastPredictionGapVerdict.factor?.let { factor ->
+                        val damped = finalUnits * factor
+                        if (damped < finalUnits) {
+                            consoleLog.add(
+                                "🪶 PRED_GAP_DAMP: ${"%.2f".format(Locale.US, finalUnits)}→" +
+                                    "${"%.2f".format(Locale.US, damped)}U (${lastPredictionGapVerdict.reason})"
+                            )
+                            rT.reason.append("🪶gap×${"%.2f".format(Locale.US, factor)} ")
+                            finalUnits = damped.coerceAtLeast(0.0)
+                        }
+                    }
+                }
                 if (preferences.get(BooleanKey.OApsAIMISecondWaveGuard)) {
                     lastSecondWaveVerdict.factor?.let { factor ->
                         val damped = finalUnits * factor
@@ -17566,6 +17596,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                     UAM = uamInts
                 }
                 consoleError.add("🔮 PREDICT GRAPH: IOB=${iobInts.size} COB=${cobInts.size} UAM=${uamInts.size}")
+                lastIobPredTerminalMgdl = iobInts.lastOrNull()?.toDouble()
                 consoleError.add("minGuardBG ${minPred.toInt()} IOBpredBG ${lastPred.toInt()} UAMterm=${uamTerminal?.toInt() ?: "n/a"}")
                 if (uamInts.size < 6) consoleError.add("⚠ WARNING: UAM Series too short (<6) for Graph!")
                 consoleLog.add(
@@ -17835,6 +17866,8 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         tickCobGrams = ctx.mealData.mealCOB.takeIf { it.isFinite() && it >= 0.0 } ?: Double.NaN
         // Reset before any early return can leave the previous tick's verdict in place.
         lastSecondWaveVerdict = SecondWaveGate.Verdict.INACTIVE
+        lastPredictionGapVerdict = PredictionGapDamper.Verdict.INACTIVE
+        lastIobPredTerminalMgdl = null
         val (
             originalProfile,
             isExplicitAdvisorRun,
