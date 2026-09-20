@@ -124,6 +124,7 @@ class BasalDecisionEngineTest {
         iob: Double = 1.0,
         maxIob: Double = 10.0,
         eventualBg: Double = 170.0,
+        minPredBg: Double? = 150.0,
         lgsThreshold: Double = 75.0,
         delta: Double = 3.0,
         nightMode: Boolean = false,
@@ -141,6 +142,7 @@ class BasalDecisionEngineTest {
         minBg = 70.0,
         lgsThreshold = lgsThreshold,
         eventualBg = eventualBg,
+        minPredBg = minPredBg,
         iob = iob,
         maxIob = maxIob,
         allowMealHighIob = false,
@@ -242,5 +244,34 @@ class BasalDecisionEngineTest {
         val reason = rt.reason.toString()
         assertTrue(reason.contains("AD_EARLY_TBR_BLOCKED")) { reason }
         assertTrue(reason.contains("evBG=")) { reason }
+    }
+
+    // The field case this guard was widened for: the curve dips into a low and comes back up, so
+    // eventualBg reads high and clears the threshold on its own while the dip goes under it.
+    // On an 11-day field log that shape produced 106 of 291 forced TBRs, the worst at minPredBG 39
+    // against an eventualBg of 250-400.
+    @Test
+    fun `forced TBR suppressed when the curve dips low before coming back up`() {
+        val (decision, rt) = decideForcedTbr(forcedTbrInput(eventualBg = 300.0, minPredBg = 39.0))
+        assertFalse(decision.overrideSafety) { "a predicted low must suppress the forced TBR" }
+        val reason = rt.reason.toString()
+        assertTrue(reason.contains("AD_EARLY_TBR_BLOCKED")) { reason }
+        assertTrue(reason.contains("minPredBG=")) { reason }
+        assertFalse(reason.contains("evBG=")) { "eventualBg was fine; only minPredBG blocked" }
+    }
+
+    @Test
+    fun `forced TBR still fires when both predictions clear the threshold`() {
+        val (decision, rt) = decideForcedTbr(forcedTbrInput(eventualBg = 200.0, minPredBg = 120.0))
+        assertTrue(decision.overrideSafety)
+        assertTrue(rt.reason.toString().contains("AD_EARLY_TBR_TRIGGER")) { rt.reason.toString() }
+    }
+
+    // A missing prediction must not silently tighten the loop: fall back to the previous behaviour.
+    @Test
+    fun `forced TBR falls back to eventualBg alone when no prediction is available`() {
+        val (decision, rt) = decideForcedTbr(forcedTbrInput(minPredBg = null))
+        assertTrue(decision.overrideSafety)
+        assertTrue(rt.reason.toString().contains("AD_EARLY_TBR_TRIGGER")) { rt.reason.toString() }
     }
 }

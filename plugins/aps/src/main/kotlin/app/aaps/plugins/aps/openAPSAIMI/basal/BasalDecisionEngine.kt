@@ -35,6 +35,14 @@ class BasalDecisionEngine @Inject constructor(
         val minBg: Double, // Min BG from profile for LGS fallback
         val lgsThreshold: Double, // Added for Hypo safety
         val eventualBg: Double,
+        /**
+         * Lowest point of the predicted curves, the same number the SMB stacking layer reads.
+         *
+         * `eventualBg` is where the curve ENDS; a hypo guard has to look at where it goes LOWEST.
+         * `null` means the prediction was unavailable this tick and the guard falls back to
+         * `eventualBg` alone, exactly as before.
+         */
+        val minPredBg: Double? = null,
         val iob: Double,
         val maxIob: Double,
         val allowMealHighIob: Boolean,
@@ -104,7 +112,7 @@ class BasalDecisionEngine @Inject constructor(
     companion object {
         /** Absolute IOB ceiling (U) above which the early-meal forced TBR is suppressed (anti-stacking). */
         private const val FORCED_TBR_MAX_IOB_U = 3.0
-        /** eventualBg must clear the LGS threshold by this margin (mg/dL) before forcing a high TBR. */
+        /** Predictions must clear the LGS threshold by this margin (mg/dL) before forcing a high TBR. */
         private const val FORCED_TBR_HYPO_MARGIN_MGDL = 15.0
         /** At night, only a genuinely steep rise (delta ≥ this, mg/dL/5m) may force the meal TBR. */
         private const val FORCED_TBR_NIGHT_MIN_DELTA = 8.0
@@ -256,7 +264,23 @@ class BasalDecisionEngine @Inject constructor(
         // These guards are strictly conservative — they can only SUPPRESS the forced boost, never raise it.
         val forcedTbrContextOk = input.modesCondition && input.bg > 100 && input.predictedBg > 110 && input.autodrive
         val forcedTbrIobHeadroomOk = input.iob < FORCED_TBR_MAX_IOB_U                                  // anti-stacking (absolute cap)
-        val forcedTbrNotDroppingHypo = input.eventualBg > input.lgsThreshold + FORCED_TBR_HYPO_MARGIN_MGDL
+        // A hypo guard must read the LOWEST point of the prediction, not its end point.
+        //
+        // `eventualBg` is where the curve ENDS. When the curve dips and comes back up — a meal
+        // answered too hard, a rebound, a dawn rise read as a meal — the end point reads high and
+        // clears the threshold on its own while the dip goes under it. Reading `eventualBg` alone
+        // therefore let the forced TBR fire straight into a predicted low: on a field log of 11 days
+        // (2026-09-09..20), 106 of 291 forced TBRs fired with the dose-facing minPredBG at or under
+        // this same threshold, the worst of them at 39 against an `eventualBg` of 250-400.
+        //
+        // Both numbers must now clear it. The min comes from the same wiring the SMB stacking layer
+        // reads, so the two hypo protections cannot disagree on the same tick. Like the guards
+        // around it this can only SUPPRESS the forced boost, never raise it, and a missing
+        // prediction falls back to the previous behaviour.
+        val forcedTbrHypoFloor = input.lgsThreshold + FORCED_TBR_HYPO_MARGIN_MGDL
+        val forcedTbrEventualOk = input.eventualBg > forcedTbrHypoFloor
+        val forcedTbrMinPredOk = input.minPredBg?.let { it > forcedTbrHypoFloor } ?: true
+        val forcedTbrNotDroppingHypo = forcedTbrEventualOk && forcedTbrMinPredOk
         val forcedTbrNightOk = !input.nightMode || input.delta >= FORCED_TBR_NIGHT_MIN_DELTA           // at night, only a steep rise
 
         if (mealOnsetDetected &&
@@ -278,7 +302,8 @@ class BasalDecisionEngine @Inject constructor(
                 rT.reason.append(
                     " [AD_EARLY_TBR_BLOCKED" +
                         (if (!forcedTbrIobHeadroomOk) " iob=${"%.1f".format(input.iob)}>=${"%.1f".format(FORCED_TBR_MAX_IOB_U)}" else "") +
-                        (if (!forcedTbrNotDroppingHypo) " evBG=${input.eventualBg.toInt()}<=lgs+${FORCED_TBR_HYPO_MARGIN_MGDL.toInt()}" else "") +
+                        (if (!forcedTbrEventualOk) " evBG=${input.eventualBg.toInt()}<=lgs+${FORCED_TBR_HYPO_MARGIN_MGDL.toInt()}" else "") +
+                        (if (!forcedTbrMinPredOk) " minPredBG=${input.minPredBg?.toInt()}<=lgs+${FORCED_TBR_HYPO_MARGIN_MGDL.toInt()}" else "") +
                         (if (!forcedTbrNightOk) " nightDelta=${"%.1f".format(input.delta)}<${"%.1f".format(FORCED_TBR_NIGHT_MIN_DELTA)}" else "") +
                         "]"
                 )

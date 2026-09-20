@@ -8319,6 +8319,10 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             minBg = bundle.profile.min_bg,
             lgsThreshold = HypoThresholdMath.getLgsThresholdSafe(bundle.profile),
             eventualBg = bundle.eventualBg,
+            // Same wiring as the SMB stacking layer, so the two hypo protections read one number.
+            minPredBg = minPredictedBgForRbtWiring(
+                authoritativeMinPredBg(bundle.rT, minPredictedAcrossCurves(bundle.rT.predBGs)),
+            ),
             iob = bundle.tickIobForEngine,
             maxIob = bundle.engineMaxIob,
             allowMealHighIob = bundle.allowMealHighIob,
