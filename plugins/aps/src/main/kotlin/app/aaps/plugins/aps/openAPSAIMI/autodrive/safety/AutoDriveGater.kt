@@ -34,6 +34,12 @@ class AutoDriveGater @Inject constructor(
         minBgLookback75m: Double = 200.0,
         estimatedRa: Double = 0.0,
         mealChannelHint: MealChannelHint? = null,
+        // A rise that starts from a low is a rescue, not a meal. Below 120 the gate does not engage
+        // if BG went under this line in the last 75 min. The default is the old 75, which only
+        // catches a rise from a real hypo. Sugar taken before BG reaches 75 leaves the line clear,
+        // so V3 engaged on the sugar rise and dosed it away. The caller raises the line to the LGS
+        // threshold when no meal is declared.
+        reboundLookbackThresholdMgdl: Double = CorrectionAggressionGate.REBOUND_MIN_BG_LOOKBACK_MGDL,
     ): GatingResult {
         // 1. Fetch real-time health data
         val health = healthRepo.fetchSnapshotForAutodriveGater()
@@ -75,7 +81,7 @@ class AutoDriveGater @Inject constructor(
             bg >= 150.0 -> combinedDelta > 0.8
             bg >= 120.0 -> combinedDelta > 1.2 ||
                 (combinedDelta > 0.8 && (uamConfidence >= 0.5 || estimatedRa >= 0.7))
-            else -> combinedDelta > 2.0 && minBgLookback75m >= CorrectionAggressionGate.REBOUND_MIN_BG_LOOKBACK_MGDL
+            else -> combinedDelta > 2.0 && minBgLookback75m >= reboundLookbackThresholdMgdl
         }
         val isMealRising = implicitMealContext && combinedDelta > 0.25
 
