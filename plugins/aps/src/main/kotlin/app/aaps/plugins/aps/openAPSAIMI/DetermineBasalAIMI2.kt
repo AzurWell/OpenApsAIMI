@@ -5575,6 +5575,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             minBgLookback75m = minBgInLastMinutes(AUTODRIVE_POST_HYPO_MIN_BG_LOOKBACK_MINUTES),
             estimatedRa = continuousStateEstimator.getLastRa(),
             mealChannelHint = lastRbtAppliedHints?.mealChannel,
+            reboundLookbackThresholdMgdl = autodriveReboundLookbackThreshold(profile),
         )
 
         // Observation only — recorded for both outcomes, before the branch. The engaged path already
@@ -12744,6 +12745,19 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             }
         }
         return finalRateUph
+    }
+
+    /**
+     * Post-hypo line for the V3 engage gate. When no meal is declared, a rise after a dip is treated
+     * as a rescue up to the LGS threshold, not only below the old 75. On a two-week field log, rises
+     * after a dip between 75 and the LGS line got much more insulin than the rises already held back,
+     * and they were the ones that fell back into a low. A declared meal (eating note or manual bolus)
+     * keeps the old line.
+     */
+    private fun autodriveReboundLookbackThreshold(profile: OapsProfileAimi): Double {
+        val base = CorrectionAggressionGate.REBOUND_MIN_BG_LOOKBACK_MGDL
+        if (MealKnownGate.isMealKnown(preferences, dateUtil.now())) return base
+        return max(base, profile.lgsThreshold?.toDouble() ?: base)
     }
 
     private fun evaluateAndLogCorrectionAggression(
