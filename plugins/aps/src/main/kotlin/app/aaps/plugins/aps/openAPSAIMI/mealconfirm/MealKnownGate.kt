@@ -83,6 +83,23 @@ object MealKnownGate {
         return elapsed < MEAL_TAIL_MIN * MIN_MS
     }
 
+    /**
+     * How long a declaration covers a meal when the user declares every meal
+     * (`MealConfirmationGate.isMealInterpretationBlocked`).
+     *
+     * Longer than [MEAL_WINDOW_MIN] on purpose: the waves of a slow meal come after 3 h. In a field
+     * log a pasta meal rose again at t+2.5 h and t+3.7 h. Shorter than [MEAL_TAIL_MIN] on purpose
+     * too: in the same log two rises with no food behind them came at about t+4.4 h (one of them the
+     * rise after rescue sugar), and both were dosed like a meal.
+     */
+    const val DECLARED_MEAL_HORIZON_MIN = 240L
+
+    /** True within [DECLARED_MEAL_HORIZON_MIN] of the last declaration. */
+    fun isWithinDeclaredMeal(preferences: Preferences, now: Long): Boolean {
+        val elapsed = msSinceArm(preferences, now) ?: return false
+        return elapsed < DECLARED_MEAL_HORIZON_MIN * MIN_MS
+    }
+
     /** True while a declared meal is still seen as running. */
     fun isMealKnown(preferences: Preferences, now: Long): Boolean =
         now < preferences.get(AimiLongKey.MealKnownUntil)
