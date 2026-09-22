@@ -116,6 +116,51 @@ object MealConfirmationGate {
     fun isMealSuppressedByUser(preferences: Preferences, now: Long): Boolean =
         now < preferences.get(AimiLongKey.MealDeniedUntil)
 
+    /**
+     * From this glucose up, a "not eating" answer no longer holds the basal at the profile rate.
+     *
+     * Below it the rise is not treated as a meal and the basal stays at the profile rate. From it
+     * up it is a real high that must still be corrected, only without the meal bypass.
+     */
+    const val DENIED_HYPER_LINE_MGDL = 180.0
+
+    /**
+     * Highest temp basal allowed while [isMealInterpretationBlocked] is true.
+     *
+     * The answer used to gate only the SMB channel and the prompt. The basal kept its meal
+     * treatment: several paths (Autodrive V3, meal-mode basal boost, trajectory bridge, the
+     * dynamic basal controller) each pushed the max basal on their own. Seen in a field log with
+     * the answer on screen: max basal for over 30 min while the loop's own prediction went to 39.
+     * Over 20 answered rises, 16 still got a basal above 2 U/h, and almost all of them stayed
+     * under 180 mg/dL.
+     *
+     * - under [DENIED_HYPER_LINE_MGDL]: the profile basal. The rise is not a meal, so no meal extra.
+     * - from [DENIED_HYPER_LINE_MGDL] up: the normal limit AIMI uses when no meal is active
+     *   ([normalMaxBasalUph]), so a real high is still corrected, just not with the meal bypass.
+     *
+     * This is a ceiling only. It never raises a rate and never touches a suspend.
+     */
+    fun deniedBasalCeilingUph(bgMgdl: Double, profileBasalUph: Double, normalMaxBasalUph: Double): Double =
+        if (bgMgdl < DENIED_HYPER_LINE_MGDL) profileBasalUph else maxOf(profileBasalUph, normalMaxBasalUph)
+
+    /**
+     * True when a rise must not be read as a meal on this tick.
+     *
+     * Two ways to get there:
+     *  - the user answered "I am not eating" and the answer is still in force, or
+     *  - [requireDeclaration] is on and no meal was declared (eating note or manual bolus) in the
+     *    last [MealKnownGate.DECLARED_MEAL_HORIZON_MIN] minutes. A user who declares every meal has already answered the question:
+     *    a rise without a declaration is not a meal.
+     *
+     * Measured on 20 answered rises in a field log: the answer gated the prompt and the carb
+     * estimator, but the loop still gave about 27 U of SMB through the meal phase (FIRST_WAVE →
+     * MEAL_PRIORITY_CHAIN) and pushed meal-sized basals. Every meal reader now asks this function.
+     */
+    fun isMealInterpretationBlocked(preferences: Preferences, now: Long, requireDeclaration: Boolean): Boolean {
+        if (isMealSuppressedByUser(preferences, now)) return true
+        return requireDeclaration && !MealKnownGate.isWithinDeclaredMeal(preferences, now)
+    }
+
     /** Remaining minutes of an active suppression, 0 when inactive. */
     fun remainingSuppressionMinutes(preferences: Preferences, now: Long): Long {
         val until = preferences.get(AimiLongKey.MealDeniedUntil)
@@ -279,9 +324,11 @@ object MealConfirmationGate {
     }
 
     /** Compact state for `rT.reason` / logs. */
-    fun statusLine(preferences: Preferences, now: Long): String =
+    fun statusLine(preferences: Preferences, now: Long, requireDeclaration: Boolean = false): String =
         if (isMealSuppressedByUser(preferences, now)) {
             "🙅 MEAL_DENIED_BY_USER ${remainingSuppressionMinutes(preferences, now)}min left"
+        } else if (requireDeclaration && !MealKnownGate.isWithinDeclaredMeal(preferences, now)) {
+            "🚫 meal-confirm: not declared, not a meal"
         } else if (now < preferences.get(AimiLongKey.MealPromptQuietUntil)) {
             "🍽️ meal-confirm: meal confirmed by user, quiet"
         } else {

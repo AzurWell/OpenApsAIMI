@@ -414,6 +414,12 @@ enum class BooleanKey(
         titleResId = R.string.pref_title_aimi_second_wave_guard,
         summaryResId = R.string.pref_summary_aimi_second_wave_guard,
     ),
+    OApsAIMIMealRequiresDeclaration(
+        key = "key_aimi_meal_requires_declaration",
+        defaultValue = false,
+        titleResId = R.string.pref_title_aimi_meal_requires_declaration,
+        summaryResId = R.string.pref_summary_aimi_meal_requires_declaration,
+    ),
     /**
      * Opt-in: sensor-driven effort protection. Caps SMB when steps/HR indicate current or recent
      * physical effort, independent of any declared AIMI Context activity intent. Reduction-only
