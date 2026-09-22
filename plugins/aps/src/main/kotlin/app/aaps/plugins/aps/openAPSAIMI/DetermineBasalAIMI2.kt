@@ -112,6 +112,7 @@ import app.aaps.plugins.aps.openAPSAIMI.prediction.PredictionSanityResult
 import app.aaps.plugins.aps.openAPSAIMI.prediction.minPredictedAcrossCurves
 import app.aaps.plugins.aps.openAPSAIMI.quality.ReplayQualityExportBuilder
 import app.aaps.plugins.aps.openAPSAIMI.quality.SmbBindingTrace
+import app.aaps.plugins.aps.openAPSAIMI.recursive.MealChannelHint
 import app.aaps.plugins.aps.openAPSAIMI.recursive.BasalFirstChannel
 import app.aaps.plugins.aps.openAPSAIMI.recursive.RecursiveBeliefAuthorityGate
 import app.aaps.plugins.aps.openAPSAIMI.release.HyperSeverityClassifier
@@ -162,6 +163,7 @@ import app.aaps.plugins.aps.openAPSAIMI.physio.EndogenousBasalBridgePolicy
 import app.aaps.plugins.aps.openAPSAIMI.physio.MealAbsorptionMemory
 import app.aaps.plugins.aps.openAPSAIMI.physio.MealAbsorptionPhase
 import app.aaps.plugins.aps.openAPSAIMI.physio.MealAbsorptionPhaseEngine
+import app.aaps.plugins.aps.openAPSAIMI.physio.MealAbsorptionPhaseHysteresis
 import app.aaps.plugins.aps.openAPSAIMI.physio.PhysiologicalPhaseClassifier
 import app.aaps.plugins.aps.openAPSAIMI.physio.PhysioContextMTR
 import app.aaps.plugins.aps.openAPSAIMI.physio.PhysioLatentState
@@ -2200,8 +2202,12 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             consoleLog.add("🛡️ BASAL_UNIFIED_SCALING: H=${"%.2f".format(hMult)}x / N=${"%.2f".format(nMult)}x -> Applied=${"%.2f".format(adaptiveMult)}x")
         }
         lastAdaptiveBasalTrace = buildAdaptiveBasalTrace(hMultRaw, hMult, nDecision, adaptiveMult)
+        // Under the hyper line, a rise that is not a meal must not get the meal priority this opens.
+        val notMealUnderHyperLine = mealInterpretationBlocked() &&
+            ctx.glucoseStatus.glucose < MealConfirmationGate.DENIED_HYPER_LINE_MGDL
         val isConfirmedHighRiseLocal =
-            ctx.glucoseStatus.glucose > 150.0 && ctx.glucoseStatus.combinedDelta > 1.5 && (ctx.glucoseStatus.bgAcceleration ?: 0.0) > 0.4
+            ctx.glucoseStatus.glucose > 150.0 && ctx.glucoseStatus.combinedDelta > 1.5 && (ctx.glucoseStatus.bgAcceleration ?: 0.0) > 0.4 &&
+                !notMealUnderHyperLine
         applyThyroidModule(ctx.profile)
         return isConfirmedHighRiseLocal
     }
@@ -3111,9 +3117,9 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         // Reported here and not at the end of the tick: a safety halt (LGS), a T3c bypass or the
         // exercise lockout all return before that point, and those are exactly the ticks where the
         // meal state is worth seeing. `rT.reason` is what reaches Nightscout.
-        consoleLog.add(MealConfirmationGate.statusLine(preferences, dateUtil.now()))
+        consoleLog.add(MealConfirmationGate.statusLine(preferences, dateUtil.now(), preferences.get(BooleanKey.OApsAIMIMealRequiresDeclaration)))
         consoleLog.add(MealKnownGate.statusLine(preferences, dateUtil.now()))
-        rT.reason.append(MealConfirmationGate.statusLine(preferences, dateUtil.now())).append(" ")
+        rT.reason.append(MealConfirmationGate.statusLine(preferences, dateUtil.now(), preferences.get(BooleanKey.OApsAIMIMealRequiresDeclaration))).append(" ")
         rT.reason.append(MealKnownGate.statusLine(preferences, dateUtil.now())).append(" ")
         if (lastSecondWaveVerdict.reason != "idle") {
             consoleLog.add("🌊 MEAL_TAIL: ${lastSecondWaveVerdict.reason}")
@@ -3639,6 +3645,31 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         lastBolusTimeMs: Long?,
         nowMs: Long,
     ): MealAbsorptionPhaseEngine.Output {
+        // Not a meal on this tick: no meal phase at all. The phase is what opened FIRST_WAVE →
+        // MEAL_PRIORITY_CHAIN and the meal-mode basal boost, and it never looked at the answer.
+        // The memory and the hold are cleared too, so an old wave does not come back when a real
+        // meal is declared later.
+        if (mealInterpretationBlocked(nowMs)) {
+            MealAbsorptionMemory.reset()
+            MealAbsorptionPhaseHysteresis.reset()
+            val none = MealAbsorptionPhaseEngine.Output(
+                phase = MealAbsorptionPhase.NONE,
+                belief = 0.0,
+                reason = "meal_not_declared",
+                deltaMgdlPer5 = delta.toDouble(),
+                gapMgdl = 0.0,
+                bestTerminalMgdl = bg,
+                memoryActive = false,
+                waveCount = 0,
+                mealDeliveryPriority = false,
+                chronoPrior = 0.0,
+                kineticScore = 0.0,
+                trajectoryScore = 0.0,
+                physioScore = 0.0,
+            )
+            lastMealAbsorptionOutput = none
+            return none
+        }
         val scenario = lastScenarioProjection
         val floorT = scenario?.clinicalFloor?.terminalMgdl ?: bg
         val bestT = scenario?.scenarioBest?.terminalMgdl ?: bg
@@ -3774,7 +3805,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             inflammationRecovery = stressMask.inflammationRecovery,
             hormonalCircadian = stressMask.hormonalCircadian,
             cgmFirstSensorConfidence = preferences.get(BooleanKey.OApsAIMISensorConfidenceCgmFirst),
-            userDeclaredNoMeal = MealConfirmationGate.isMealSuppressedByUser(preferences, dateUtil.now()),
+            userDeclaredNoMeal = mealInterpretationBlocked(),
         )
         lastUamHypothesisState = hypothesisState
         lastPhysioLatentState = latentState
@@ -5574,7 +5605,8 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             hasRecentMealEstimate = hasRecentMealEstimate,
             minBgLookback75m = minBgInLastMinutes(AUTODRIVE_POST_HYPO_MIN_BG_LOOKBACK_MINUTES),
             estimatedRa = continuousStateEstimator.getLastRa(),
-            mealChannelHint = lastRbtAppliedHints?.mealChannel,
+            // No meal on this tick: the gate must not open on a meal-aware rise.
+            mealChannelHint = if (mealInterpretationBlocked()) MealChannelHint.SUPPRESS else lastRbtAppliedHints?.mealChannel,
             reboundLookbackThresholdMgdl = autodriveReboundLookbackThreshold(profile),
         )
 
@@ -7173,12 +7205,16 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             shortAvgDeltaMgdlPer5 = shortAvgDelta.toDouble(),
         )
 
+        // Red Carpet puts back what the safeties cut, in a meal. With no meal, only an explicit action
+        // or a meal mode may still ask for it.
+        val inferredMealAllowed = !mealInterpretationBlocked()
         val isRedCarpetSituation =
             isExplicitAction ||
                 anyMealModeForGuard ||
-                implicitMealCorrection.redCarpetEligible ||
-                isConfirmedHighRiseLocal ||
-                (isMealChaos && smbExecution.finalSmb > 0.5)
+                (inferredMealAllowed &&
+                    (implicitMealCorrection.redCarpetEligible ||
+                        isConfirmedHighRiseLocal ||
+                        (isMealChaos && smbExecution.finalSmb > 0.5)))
 
         val gatedUnits = smbToGiveLocal
         val proposedUnits = smbExecution.finalSmb.toFloat()
@@ -14260,9 +14296,11 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         // Helper interne pour vérifier AIMI Context (RContext) - supposer true si mealData indique un repas récent
         // Dans une implémentation idéale, on injecterait le ContextRepository, mais ici on utilise les proxies disponibles
         // 🐛 FIX: 'mealData.isMealStart' n'existe pas. On utilise la variable locale 'isMealActive' calculée plus haut.
-        val isAimiContextMeal = !isExplicitUserAction && mealCorrectionContext.redCarpetEligible
+        val inferredMealAllowed = !mealInterpretationBlocked()
+        val isAimiContextMeal = !isExplicitUserAction && inferredMealAllowed && mealCorrectionContext.redCarpetEligible
 
-        val isRedCarpetSituation = isExplicitUserAction || isMealModeCondition() || isAimiContextMeal || ((isMealChaos || isMealActive) && proposedUnits > 0.5f)
+        val isRedCarpetSituation = isExplicitUserAction || isMealModeCondition() || isAimiContextMeal ||
+            (inferredMealAllowed && (isMealChaos || isMealActive) && proposedUnits > 0.5f)
 
         // On entre dans la logique forcée si on est en situation "Red Carpet" et qu'il y a une demande
         if (isRedCarpetSituation && proposedUnits > 0.0 && !iobSurveillanceSuppressRedCarpet) {
@@ -17557,7 +17595,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 cfrdExacerbationActive = cfrdExacerbationActive,
                 hrInflammationElevated = hrInflammationElevated,
                 maxGramsPref = preferences.get(DoubleKey.OApsAIMIUndeclaredCobMaxG),
-                userDeclaredNoMeal = MealConfirmationGate.isMealSuppressedByUser(preferences, dateUtil.now()),
+                userDeclaredNoMeal = mealInterpretationBlocked(),
             )
         )
         consoleLog.add("🍽️ VIRTUAL_COB: ${result.toLogString()}")
@@ -18597,7 +18635,8 @@ class DetermineBasalaimiSMB2 @Inject constructor(
 
         // 🙅 User-arbitrated meal interpretation: ask before dosing a carb-free rise as a meal.
         // Silence keeps current behaviour; only an explicit "I am not eating" suppresses it.
-        MealConfirmationPrompt.raiseIfNeeded(
+        // A user who declares every meal has already answered: there is nothing to ask.
+        if (!preferences.get(BooleanKey.OApsAIMIMealRequiresDeclaration)) MealConfirmationPrompt.raiseIfNeeded(
             notificationManager = notificationManager,
             preferences = preferences,
             context = context,
@@ -18766,9 +18805,52 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 }
             },
         ) {
-            AimiDetermineBasalTickOrchestrator.run(this, ctx)
+            AimiDetermineBasalTickOrchestrator.run(this, ctx).also { applyMealDeniedBasalCap(it, ctx) }
         }
     }
+
+    /**
+     * No meal on this tick (the user said "I am not eating", or declares every meal and declared
+     * none): take the meal treatment out of the basal as well.
+     *
+     * Placed on the tick result, after every path has written its rate, because no single basal
+     * path is to blame: V3, the meal-mode boost, the trajectory bridge and the dynamic controller
+     * all reached the max basal on their own while the answer was on screen. A cap inside one of them
+     * would leave the others open. See [MealConfirmationGate.deniedBasalCeilingUph].
+     */
+    private fun applyMealDeniedBasalCap(result: RT, ctx: AimiTickContext) {
+        if (!mealInterpretationBlocked()) return
+        // No new rate on this tick means the running temp basal goes on. It can be a meal-sized
+        // temp set before the answer, so it is checked like a new one.
+        val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
+        val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp } ?: return
+        val profile = ctx.profile
+        val bgNow = ctx.glucoseStatus.glucose
+        if (!bgNow.isFinite() || !profile.current_basal.isFinite()) return
+        // Same limit as setTempBasal when no meal bypass is active.
+        val normalMax = min(
+            profile.max_basal,
+            min(
+                profile.max_daily_safety_multiplier * profile.max_daily_basal,
+                profile.current_basal_safety_multiplier * profile.current_basal
+            )
+        )
+        val ceiling = MealConfirmationGate.deniedBasalCeilingUph(bgNow, profile.current_basal, normalMax)
+        if (rate <= ceiling) return
+        result.rate = ceiling
+        if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
+        val line = "MEAL_DENIED_BASAL_CAP ${"%.2f".format(rate)}→${"%.2f".format(ceiling)}U/h (BG ${"%.0f".format(bgNow)})"
+        consoleLog.add("🙅 $line")
+        result.reason.append(" [$line]")
+    }
+
+    /** See [MealConfirmationGate.isMealInterpretationBlocked]. */
+    private fun mealInterpretationBlocked(now: Long = dateUtil.now()): Boolean =
+        MealConfirmationGate.isMealInterpretationBlocked(
+            preferences,
+            now,
+            preferences.get(BooleanKey.OApsAIMIMealRequiresDeclaration),
+        )
 
     private fun inferFinalLoopDecisionFromResult(result: RT): String {
         val units = result.units ?: 0.0
@@ -19188,6 +19270,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     }
 
     private fun inferredMealSafetyIntent(): Boolean {
+        if (mealInterpretationBlocked()) return false
         val postHypo = lastPostHypoDeliveryAuthority
         if (postHypo.active && postHypo.forceMealInterpretationSuppressed) return false
         // 🏃 Effort / post-effort adrenaline rise is not a meal (undeclared context only).
