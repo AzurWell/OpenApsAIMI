@@ -149,7 +149,7 @@ object MealConfirmationGate {
      * Two ways to get there:
      *  - the user answered "I am not eating" and the answer is still in force, or
      *  - [requireDeclaration] is on and no meal was declared (eating note or manual bolus) in the
-     *    last [MealKnownGate.DECLARED_MEAL_HORIZON_MIN] minutes. A user who declares every meal has already answered the question:
+     *    last [MealKnownGate.declaredMealHorizonMin] minutes. A user who declares every meal has already answered the question:
      *    a rise without a declaration is not a meal.
      *
      * Measured on 20 answered rises in a field log: the answer gated the prompt and the carb

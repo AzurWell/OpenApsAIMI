@@ -3080,6 +3080,13 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             }
         }
 
+        // 🩹 "This bolus is a correction": a "correction" note closes the meal window, and the bolus
+        // next to it (read just below) opens nothing. Before the bolus on purpose.
+        if (MealKnownGate.applyCorrectionNote(preferences, therapy.correctionNoteStartMs)) {
+            consoleLog.add("🩹 MEAL_KNOWN: closed by the correction note")
+            rT.reason.append("🩹 correction note: meal window closed ")
+        }
+
         // 🍽️ The user's own prebolus is the meal declaration: no button, no carb count.
         // Only opens the knowledge window (MealKnownGate). It never doses anything by itself.
         MealKnownGate.armFromManualBolus(
