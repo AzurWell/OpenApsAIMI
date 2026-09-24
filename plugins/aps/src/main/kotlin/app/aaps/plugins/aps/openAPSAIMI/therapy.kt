@@ -53,6 +53,13 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
      * and does not raise the basal cap. `MealKnownGate` reads it.
      */
     var mealKnownStartMs = 0L
+
+    /**
+     * Timestamp of the newest recent "correction" note, 0 when there is none.
+     *
+     * The "this bolus is a correction" button: `MealKnownGate` closes the meal window on it.
+     */
+    var correctionNoteStartMs = 0L
     private var latestNoteEvents: List<TE> = emptyList()
 
     fun updateStatesBasedOnTherapyEvents(forceRefresh: Boolean = false) {
@@ -110,6 +117,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
                 anticipTime = findActiveAnticipEvents(events, now),
                 fclTime = findActiveFclEvents(events, now),
                 mealKnownStartMs = findActiveMealKnownStart(events, now),
+                correctionNoteStartMs = findRecentCorrectionNoteStart(events, now),
                 bfastTime = findActivebfastEvents(events, now),
                 lunchTime = findActiveLunchEvents(events, now),
                 dinnerTime = findActiveDinnerEvents(events, now),
@@ -134,6 +142,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
             anticipTime = false,
             fclTime = false,
             mealKnownStartMs = 0L,
+            correctionNoteStartMs = 0L,
             bfastTime = false,
             lunchTime = false,
             dinnerTime = false,
@@ -174,6 +183,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
         anticipTime = snapshot.anticipTime
         fclTime = snapshot.fclTime
         mealKnownStartMs = snapshot.mealKnownStartMs
+        correctionNoteStartMs = snapshot.correctionNoteStartMs
         bfastTime = snapshot.bfastTime
         lunchTime = snapshot.lunchTime
         dinnerTime = snapshot.dinnerTime
@@ -195,6 +205,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
         anticipTime = false
         fclTime = false
         mealKnownStartMs = 0L
+        correctionNoteStartMs = 0L
         bfastTime = false
         lunchTime = false
         dinnerTime = false
@@ -213,6 +224,21 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
             .filter { event ->
                 event.note?.contains("eating", ignoreCase = true) == true &&
                     now <= (event.timestamp + event.duration)
+            }
+            .maxOfOrNull { it.timestamp } ?: 0L
+
+    /**
+     * Newest note holding "correction" from the last 30 minutes, or 0 when there is none.
+     *
+     * Read over a fixed 30 minutes as well as the note's own duration: an Automation that writes
+     * the note with no duration must still be seen on the next tick.
+     */
+    private fun findRecentCorrectionNoteStart(events: List<TE>, now: Long): Long =
+        events.filter { it.type == TE.Type.NOTE }
+            .filter { event ->
+                event.note?.contains("correction", ignoreCase = true) == true &&
+                    event.timestamp <= now &&
+                    now <= event.timestamp + maxOf(event.duration, TimeUnit.MINUTES.toMillis(30))
             }
             .maxOfOrNull { it.timestamp } ?: 0L
 
@@ -367,6 +393,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
         val anticipTime: Boolean,
         val fclTime: Boolean,
         val mealKnownStartMs: Long,
+        val correctionNoteStartMs: Long,
         val bfastTime: Boolean,
         val lunchTime: Boolean,
         val dinnerTime: Boolean,
