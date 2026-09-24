@@ -2389,6 +2389,7 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
                 add(BooleanKey.OApsAIMIAnticipMealEvidence)
                 add(BooleanKey.OApsAIMISecondWaveGuard)
                 add(BooleanKey.OApsAIMIMealRequiresDeclaration)
+                add(IntKey.OApsAIMIDeclaredMealHorizonMin)
                 add(BooleanKey.OApsAIMIPredictionGapDamper)
                 add(DoubleKey.OApsAIMIautodrivesmallPrebolus)
                 add(DoubleKey.OApsAIMIautodrivePrebolus)
