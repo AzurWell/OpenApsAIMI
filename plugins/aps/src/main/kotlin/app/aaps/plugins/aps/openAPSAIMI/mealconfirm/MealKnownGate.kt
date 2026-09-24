@@ -1,6 +1,7 @@
 package app.aaps.plugins.aps.openAPSAIMI.mealconfirm
 
 import app.aaps.core.data.model.BS
+import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.plugins.aps.openAPSAIMI.keys.AimiLongKey
 
@@ -94,11 +95,30 @@ object MealKnownGate {
      */
     const val DECLARED_MEAL_HORIZON_MIN = 240L
 
-    /** True within [DECLARED_MEAL_HORIZON_MIN] of the last declaration. */
+    /**
+     * The horizon actually in force: [IntKey.OApsAIMIDeclaredMealHorizonMin], so the user can tune
+     * it without a rebuild. No single value fits every meal: in a field log a quick lunch was over
+     * at t+3 h and the loop dosed a small rise at t+3h30 into a low, while a pasta dinner was still
+     * arriving at t+3h40. A value outside the key's own range falls back to
+     * [DECLARED_MEAL_HORIZON_MIN].
+     */
+    fun declaredMealHorizonMin(preferences: Preferences): Long {
+        val key = IntKey.OApsAIMIDeclaredMealHorizonMin
+        val value = preferences.get(key)
+        return if (value in key.min..key.max) value.toLong() else DECLARED_MEAL_HORIZON_MIN
+    }
+
+    /** True within [declaredMealHorizonMin] of the last declaration. */
     fun isWithinDeclaredMeal(preferences: Preferences, now: Long): Boolean {
         val elapsed = msSinceArm(preferences, now) ?: return false
-        return elapsed < DECLARED_MEAL_HORIZON_MIN * MIN_MS
+        return elapsed < declaredMealHorizonMin(preferences) * MIN_MS
     }
+
+    /**
+     * A manual bolus this close to a "correction" note, before or after it, never opens the meal
+     * window. The user may press the button first and bolus next, or the other way round.
+     */
+    const val CORRECTION_SHIELD_MIN = 30L
 
     /** True while a declared meal is still seen as running. */
     fun isMealKnown(preferences: Preferences, now: Long): Boolean =
@@ -196,6 +216,7 @@ object MealKnownGate {
         // Mark it as seen either way, so a correction is not looked at again on every later tick.
         preferences.put(AimiLongKey.MealKnownLastBolusMs, candidate.timestamp)
         if (!looksLikeMealBolus(bgMgdl, deltaMgdl)) return null
+        if (isShieldedByCorrectionNote(preferences, candidate.timestamp)) return null
 
         // The meal started when the bolus was given, not when the tick noticed it. Normally one or
         // two ticks apart; after an install or a restart the bolus can be much older, and anchoring
@@ -220,6 +241,38 @@ object MealKnownGate {
         preferences.put(AimiLongKey.MealKnownLastNoteMs, noteStartMs)
         arm(preferences, now)
         return true
+    }
+
+    /**
+     * The "this bolus is a correction" button: an AAPS Automation writes a note holding
+     * "correction", and the meal window closes.
+     *
+     * Written for a morning in a field log: a 1.5 U correction at 145 mg/dL, before a site change,
+     * passed [looksLikeMealBolus] and opened four hours of meal treatment with nothing eaten. The
+     * glucose test cannot tell that bolus from a prebolus, only the user can.
+     *
+     * An eating note newer than this note wins and keeps its window. A manual bolus within
+     * [CORRECTION_SHIELD_MIN] of it is the correction itself and opens nothing
+     * ([isShieldedByCorrectionNote]). The keyword holds neither "meal" nor "stop" on purpose: other notes already
+     * match on those words and would start a meal mode or clear every active note.
+     *
+     * @param noteStartMs timestamp of the newest recent "correction" note, 0 when there is none.
+     * @return true when this call closed an open window.
+     */
+    fun applyCorrectionNote(preferences: Preferences, noteStartMs: Long): Boolean {
+        if (noteStartMs <= 0L) return false
+        if (noteStartMs <= preferences.get(AimiLongKey.MealKnownLastCorrectionNoteMs)) return false
+        preferences.put(AimiLongKey.MealKnownLastCorrectionNoteMs, noteStartMs)
+        val armedAt = preferences.get(AimiLongKey.MealKnownArmedAt)
+        if (armedAt <= 0L || armedAt > noteStartMs) return false
+        clear(preferences)
+        return true
+    }
+
+    /** True when [bolusMs] is within [CORRECTION_SHIELD_MIN] of the last "correction" note. */
+    fun isShieldedByCorrectionNote(preferences: Preferences, bolusMs: Long): Boolean {
+        val noteMs = preferences.get(AimiLongKey.MealKnownLastCorrectionNoteMs)
+        return noteMs > 0L && kotlin.math.abs(bolusMs - noteMs) <= CORRECTION_SHIELD_MIN * MIN_MS
     }
 
     /** The test that tells a meal prebolus from a correction. Kept apart so it can be unit tested. */
