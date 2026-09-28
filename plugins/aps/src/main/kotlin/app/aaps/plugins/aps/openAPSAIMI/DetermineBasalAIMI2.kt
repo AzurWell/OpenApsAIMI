@@ -3293,20 +3293,18 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             }
         }
 
-        // Lowest glucose since the meal was declared — the shape test of the second-rise gate.
+        // Peak and trough since the meal was declared — the shape test of the second-rise gate.
         if (MealKnownGate.msSinceArm(preferences, dateUtil.now()) != null) {
             MealKnownGate.trackBg(preferences, bg)
         }
 
-        // Second rise of the same meal. Worked out every tick, applied only when the key is on.
+        // Second rise of the same meal. Worked out every tick, applied at the end of the tick
+        // (applySecondWaveHold) only when the key is on.
         lastSecondWaveVerdict = SecondWaveGate.evaluate(
             preferences = preferences,
             now = dateUtil.now(),
-            iobU = iob.toDouble(),
             declaredCobG = ctx.mealData.mealCOB,
             bgMgdl = bg,
-            deltaMgdl = delta.toDouble(),
-            bgMinSinceArmMgdl = MealKnownGate.bgMinSinceArm(preferences),
         )
 
         // Reported here and not at the end of the tick: a safety halt (LGS), a T3c bypass or the
@@ -3317,7 +3315,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         rT.reason.append(MealConfirmationGate.statusLine(preferences, dateUtil.now(), preferences.get(BooleanKey.OApsAIMIMealRequiresDeclaration))).append(" ")
         rT.reason.append(MealKnownGate.statusLine(preferences, dateUtil.now())).append(" ")
         if (lastSecondWaveVerdict.reason != "idle") {
-            consoleLog.add("🌊 MEAL_TAIL: ${lastSecondWaveVerdict.reason}")
+            consoleLog.add("🌊 SECOND_WAVE: ${lastSecondWaveVerdict.reason}")
             rT.reason.append("🌊 ").append(lastSecondWaveVerdict.reason).append(" ")
         }
         this.acceleratingUp = if (delta > 2 && delta - longAvgDelta > 2) 1 else 0
@@ -14962,19 +14960,6 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                         }
                     }
                 }
-                if (preferences.get(BooleanKey.OApsAIMISecondWaveGuard)) {
-                    lastSecondWaveVerdict.factor?.let { factor ->
-                        val damped = finalUnits * factor
-                        if (damped < finalUnits) {
-                            consoleLog.add(
-                                "🌊 MEAL_TAIL_DAMP: ${"%.2f".format(Locale.US, finalUnits)}→" +
-                                    "${"%.2f".format(Locale.US, damped)}U (${lastSecondWaveVerdict.reason})"
-                            )
-                            rT.reason.append("🌊tail×${"%.2f".format(Locale.US, factor)} ")
-                            finalUnits = damped.coerceAtLeast(0.0)
-                        }
-                    }
-                }
                 // Cumulative early-window SMB budget (Q5): a past hard effort cannot stack context-SMB
                 // into an overshoot even with prolonged high BG. Per SlowCarbMeal window, reset on change.
                 val slowCarbEarlyStart = lastContextSnapshot?.activeIntents
@@ -19372,7 +19357,10 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 }
             },
         ) {
-            AimiDetermineBasalTickOrchestrator.run(this, ctx).also { applyMealDeniedBasalCap(it, ctx) }
+            AimiDetermineBasalTickOrchestrator.run(this, ctx).also {
+                applyMealDeniedBasalCap(it, ctx)
+                applySecondWaveHold(it, ctx)
+            }
         }
     }
 
@@ -19408,6 +19396,38 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
         val line = "MEAL_DENIED_BASAL_CAP ${"%.2f".format(rate)}→${"%.2f".format(ceiling)}U/h (BG ${"%.0f".format(bgNow)})"
         consoleLog.add("🙅 $line")
+        result.reason.append(" [$line]")
+    }
+
+    /**
+     * A second rise of a meal that has not proven itself yet: nothing above the scheduled basal,
+     * no SMB. See [SecondWaveGate].
+     *
+     * On the tick result for the same reason as [applyMealDeniedBasalCap]: the SMB and the boosted
+     * basal come from several paths, and on these rises about half of the extra insulin is basal.
+     * When the key is off, the tick says what it would have held back, so the rule can be read on
+     * real meals before it doses anything.
+     */
+    private fun applySecondWaveHold(result: RT, ctx: AimiTickContext) {
+        if (!lastSecondWaveVerdict.hold) return
+        val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
+        val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp }
+        val scheduled = ctx.profile.current_basal
+        val smb = result.units ?: 0.0
+        val basalOver = rate != null && scheduled.isFinite() && rate > scheduled
+        if (smb <= 0.0 && !basalOver) return
+        val applied = preferences.get(BooleanKey.OApsAIMISecondWaveGuard)
+        if (applied) {
+            if (smb > 0.0) result.units = 0.0
+            if (basalOver) {
+                result.rate = scheduled
+                if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
+            }
+        }
+        val line = (if (applied) "SECOND_WAVE_HOLD" else "SECOND_WAVE_HOLD(shadow)") +
+            (if (smb > 0.0) " SMB ${"%.2f".format(smb)}→0" else "") +
+            (if (basalOver) " basal ${"%.2f".format(rate)}→${"%.2f".format(scheduled)}U/h" else "")
+        consoleLog.add("🌊 $line (${lastSecondWaveVerdict.reason})")
         result.reason.append(" [$line]")
     }
 

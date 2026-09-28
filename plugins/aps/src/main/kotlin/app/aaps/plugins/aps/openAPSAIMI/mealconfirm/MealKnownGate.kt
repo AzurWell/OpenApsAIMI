@@ -156,32 +156,58 @@ object MealKnownGate {
         preferences.put(AimiLongKey.MealKnownUntil, now + MEAL_WINDOW_MIN * MIN_MS)
         preferences.put(AimiLongKey.MealKnownArmedAt, now)
         // A new meal starts a new glucose history; [trackBg] fills it from the next tick.
-        preferences.put(AimiLongKey.MealKnownBgMinMgdl, 0L)
+        resetBgShape(preferences)
     }
 
+    /** Where glucose started, how high the meal took it, and how low it came back since. */
+    data class BgShape(val startMgdl: Double, val peakMgdl: Double, val troughMgdl: Double)
+
     /**
-     * Records the lowest glucose seen since the meal was declared. Called once per tick.
+     * Follows the glucose of the meal. Called once per tick while a meal is declared.
      *
-     * This is what tells a second rise from a meal that simply never came down. A second rise goes
-     * peak → trough → up again; a baguette with cheese sits at 250 for six hours and needs insulin
-     * the whole way. Only the trough separates them.
+     * This is what tells a second rise from the first wave, and from a meal that simply never came
+     * down: a second rise goes peak → trough → up again. A new peak restarts the trough, so a real
+     * wave that climbs past the first one is back to "first wave" for [SecondWaveGate].
      */
     fun trackBg(preferences: Preferences, bgMgdl: Double) {
         if (!bgMgdl.isFinite() || bgMgdl <= 0.0) return
-        val current = preferences.get(AimiLongKey.MealKnownBgMinMgdl)
         val value = bgMgdl.toLong()
-        if (current <= 0L || value < current) preferences.put(AimiLongKey.MealKnownBgMinMgdl, value)
+        if (preferences.get(AimiLongKey.MealKnownBgStartMgdl) <= 0L) {
+            preferences.put(AimiLongKey.MealKnownBgStartMgdl, value)
+            preferences.put(AimiLongKey.MealKnownBgPeakMgdl, value)
+            preferences.put(AimiLongKey.MealKnownBgTroughMgdl, value)
+            return
+        }
+        if (value > preferences.get(AimiLongKey.MealKnownBgPeakMgdl)) {
+            preferences.put(AimiLongKey.MealKnownBgPeakMgdl, value)
+            preferences.put(AimiLongKey.MealKnownBgTroughMgdl, value)
+        } else if (value < preferences.get(AimiLongKey.MealKnownBgTroughMgdl)) {
+            preferences.put(AimiLongKey.MealKnownBgTroughMgdl, value)
+        }
     }
 
-    /** Lowest glucose since the meal was declared, or null when nothing was recorded yet. */
-    fun bgMinSinceArm(preferences: Preferences): Double? =
-        preferences.get(AimiLongKey.MealKnownBgMinMgdl).takeIf { it > 0L }?.toDouble()
+    /** The glucose of the current meal so far, or null when nothing was recorded yet. */
+    fun bgShape(preferences: Preferences): BgShape? {
+        val start = preferences.get(AimiLongKey.MealKnownBgStartMgdl)
+        if (start <= 0L) return null
+        return BgShape(
+            startMgdl = start.toDouble(),
+            peakMgdl = preferences.get(AimiLongKey.MealKnownBgPeakMgdl).toDouble(),
+            troughMgdl = preferences.get(AimiLongKey.MealKnownBgTroughMgdl).toDouble(),
+        )
+    }
+
+    private fun resetBgShape(preferences: Preferences) {
+        preferences.put(AimiLongKey.MealKnownBgStartMgdl, 0L)
+        preferences.put(AimiLongKey.MealKnownBgPeakMgdl, 0L)
+        preferences.put(AimiLongKey.MealKnownBgTroughMgdl, 0L)
+    }
 
     /** Closes the window, for example when the user says they are not eating after all. */
     fun clear(preferences: Preferences) {
         preferences.put(AimiLongKey.MealKnownUntil, 0L)
         preferences.put(AimiLongKey.MealKnownArmedAt, 0L)
-        preferences.put(AimiLongKey.MealKnownBgMinMgdl, 0L)
+        resetBgShape(preferences)
     }
 
     /**
