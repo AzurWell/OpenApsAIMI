@@ -3,146 +3,123 @@ package app.aaps.plugins.aps.openAPSAIMI.mealconfirm
 import app.aaps.core.keys.interfaces.Preferences
 
 /**
- * What to do with a rise that happens hours after a declared meal.
+ * What to do with a rise that comes after the first wave of a declared meal has come down.
  *
- * There are two of them, they look alike on a single tick, and they need opposite treatment.
+ * Hours after a meal the loop has no memory of it: carbs read as zero, so every rise is
+ * rediscovered as a brand new meal and dosed like one — rise exemption, 6.5 U/h, the largest SMB on
+ * every tick — on top of the insulin the first wave still has on board.
  *
- * **The tail.** The meal peaked, came down, and hours later the last of it arrives. Measured on
- * 2026-09-14: half a baguette at 11:56, peak 142, trough 72 at 13:22, then back up — and AIMI put
- * **6.65 U into the last three hours** because `COB` reads 0 and every tick rediscovers the rise as
- * if it were a new meal. Total 12.10 U for ~40 g of bread, and the hypo that followed was avoided
- * only because the user ate 10 g of sugar at 18:30. This is the case to damp.
+ * ## Dose on proof
  *
- * **The fat plateau.** Bread with cheese, or pizza: glucose climbs and *stays* up for hours, and
- * the fat installs real insulin resistance on top. In the user's words: "avant le pain j'étais à
- * 15 unités, 5 au début puis après je monte à 250 durant 4h avec des 0,8 tout le temps, ça installe
- * une résistance galère". That plateau genuinely needs the insulin. Damping it would hold them at
- * 250 for longer, which is the opposite of the point.
+ * Measured on the user's meals of 2026-09-22 → 2026-09-27, tick by tick. Neither the insulin on
+ * board (the real second waves ran at 6-7 U, the false ones at 0.4-3.3 U), nor minPredBG (39-51 in
+ * both families), nor eventualBG (300-400 as soon as the rise exemption fires, in both) tells the
+ * two apart. **The height of the rise above the trough does:**
  *
- * The two are told apart by **the trough**, the same test [MealKnownGate.bgMinSinceArm] already
- * records: a tail has come back near normal before rising again, a plateau never comes down at all.
+ * | meal | rise above trough | extra insulin sent | outcome |
+ * |---|---|---|---|
+ * | 2026-09-23 17:00 | +15 | 4.4 U | fell to 100 |
+ * | 2026-09-24 16:00 | +16 | 1.9 U | **hypo 50** |
+ * | 2026-09-27 14:20 | +38 | 5.1 U | **hypo 64** |
+ * | 2026-09-22 lunch | +42 | — | real wave, 215 |
+ * | 2026-09-24 evening, baguette | +73 | — | real wave, 241 |
  *
- * Reduction only, bolus channel only — the temporary basal is left alone, so a real rise can still
- * be held without stacking boluses on top of it.
+ * The loop sends everything on the first tick of the rise, before anyone can know which of the two
+ * it is. So once the first wave has come down, nothing goes above the profile — no SMB, no basal
+ * above the scheduled rate — until the rise has climbed [PROOF_MGDL] above its trough. Then the
+ * loop doses as usual. The price is paid by the real waves: they start being dosed 20-40 minutes
+ * later, and peak a little higher.
  *
- * ## Why this is a damper and not a budget
+ * The scheduled basal always keeps running. This holds back the meal treatment, never the basal.
  *
- * The first version of this gate capped each SMB at 0.4 U and gave the whole second rise a 3 U
- * budget. Replayed against the pasta lunch of 2026-09-11 — five separate rises over seven hours,
- * 7.9 U, no hypo — that budget would have run out at t+2h20 and closed the bolus channel for waves
- * three, four and five, on insulin the meal really needed. A fixed budget cannot know how much is
- * left to come. Scaling with the age of the meal can.
+ * ## What it leaves alone
+ * - **The first wave.** Nothing happens until glucose has climbed [FIRST_WAVE_MIN_MGDL] above where
+ *   it was when the meal was declared, then come down [DESCENT_MIN_MGDL] from that peak. A prebolus
+ *   dip before the carbs arrive is not a descent: there was no peak yet.
+ * - **The fat plateau.** Bread with cheese sits at 200-250 for hours and needs its insulin. Above
+ *   [HOLD_CEILING_MGDL] nothing is held.
+ * - **A new declaration.** Pressing "eating" again, or a new meal bolus, restarts the meal and its
+ *   glucose history: the user saying "more is coming" beats this gate.
+ *
+ * ## Why not the earlier damper
+ * The previous version scaled the SMB down with the age of the meal, only above 140 mg/dL and with
+ * 2.5 U on board, and left the basal alone. It would have missed the hypo of 2026-09-24 entirely
+ * (125 mg/dL, 1.9 U on board), and the boosted basal is about 45 % of the extra insulin on these
+ * rises.
  */
 object SecondWaveGate {
 
-    /**
-     * Before this much time has passed, the rise is still the first wave of the meal and must be
-     * dosed normally. Two hours also puts the gate after the fast carb peak.
-     */
-    const val MIN_ELAPSED_MIN = 120L
+    /** Before this, the rise is still the first wave, whatever its shape. */
+    const val MIN_ELAPSED_MIN = 60L
 
     /** Past this, the meal's clock is no longer relevant to the rise. */
     const val MAX_ELAPSED_MIN = MealKnownGate.MEAL_TAIL_MIN
 
-    /** Under this, nothing is stacked yet, so there is nothing to protect against. */
-    const val MIN_IOB_U = 2.5
-
-    /** A real rise, not noise. */
-    const val MIN_DELTA_MGDL = 2.0
-
-    /** Under this there is no rise worth damping, whatever the delta says. */
-    const val MIN_BG_MGDL = 140.0
+    /** The first wave counts as having happened once glucose climbed this far above the start. */
+    const val FIRST_WAVE_MIN_MGDL = 20.0
 
     /**
-     * The shape test. A tail has come back near normal since the meal and climbed away from that
-     * low again; a fat plateau never comes down.
+     * The first wave counts as treated once glucose came down this far from its peak. The small
+     * dip of 2026-09-22 lunch (199 → 173) stays under it, and that meal was a real wave.
      */
-    const val TROUGH_MAX_MGDL = 140.0
-    const val REBOUND_MIN_MGDL = 30.0
+    const val DESCENT_MIN_MGDL = 30.0
 
-    /**
-     * How much of the proposed bolus survives, by meal age.
-     *
-     * At t+2h the meal can still have most of itself ahead, so nothing is taken. By t+5h what is
-     * left is a tail of a few grams, and the loop is dosing it as if a whole meal were coming.
-     * Read against 2026-09-14: the 6.65 U given between t+2h30 and t+5h30 become roughly 2.5 U.
-     *
-     * Never below [MIN_FACTOR] — this reduces a dose, it never refuses one outright. The loop keeps
-     * its own safety guards underneath.
-     */
-    const val MIN_FACTOR = 0.35
+    /** A second rise has proven itself once it climbed this far above its trough. */
+    const val PROOF_MGDL = 35.0
+
+    /** Above this, glucose is left to the loop: a high plateau needs its insulin. */
+    const val HOLD_CEILING_MGDL = 200.0
 
     private const val MIN_MS = 60_000L
 
     data class Verdict(
-        /** True when this tick is inside a damped meal tail. */
-        val active: Boolean,
-        /** Multiplier to apply to the bolus, or null when the gate does not limit this tick. */
-        val factor: Double?,
+        /** True when nothing above the scheduled basal may be given on this tick. */
+        val hold: Boolean,
         /** Short reason for `rT.reason` and the logs. */
         val reason: String,
     ) {
 
         companion object {
 
-            val INACTIVE = Verdict(active = false, factor = null, reason = "idle")
+            val INACTIVE = Verdict(hold = false, reason = "idle")
         }
     }
 
-    /**
-     * The shape that tells a tail from a meal that never came down. Kept apart so it can be unit
-     * tested. See [TROUGH_MAX_MGDL].
-     */
-    fun looksLikeSecondRise(bgMgdl: Double, troughMgdl: Double): Boolean =
-        troughMgdl <= TROUGH_MAX_MGDL && bgMgdl - troughMgdl >= REBOUND_MIN_MGDL
+    /** True once the first wave of the meal has peaked and come down. */
+    fun firstWaveCameDown(startMgdl: Double, peakMgdl: Double, troughMgdl: Double): Boolean =
+        peakMgdl - startMgdl >= FIRST_WAVE_MIN_MGDL && peakMgdl - troughMgdl >= DESCENT_MIN_MGDL
 
     /**
-     * How much of the bolus survives at this meal age: 1.0 up to [MIN_ELAPSED_MIN], then down to
-     * [MIN_FACTOR] at [MAX_ELAPSED_MIN], linearly. Kept apart so it can be unit tested.
+     * The whole rule on plain numbers, kept apart so it can be unit tested.
+     *
+     * @param troughMgdl lowest glucose since the peak.
      */
-    fun dampingFactor(elapsedMin: Long): Double {
-        if (elapsedMin <= MIN_ELAPSED_MIN) return 1.0
-        if (elapsedMin >= MAX_ELAPSED_MIN) return MIN_FACTOR
-        val span = (MAX_ELAPSED_MIN - MIN_ELAPSED_MIN).toDouble()
-        val progress = (elapsedMin - MIN_ELAPSED_MIN).toDouble() / span
-        return 1.0 - progress * (1.0 - MIN_FACTOR)
-    }
+    fun holds(bgMgdl: Double, startMgdl: Double, peakMgdl: Double, troughMgdl: Double): Boolean =
+        firstWaveCameDown(startMgdl, peakMgdl, troughMgdl) &&
+            bgMgdl - troughMgdl < PROOF_MGDL &&
+            bgMgdl < HOLD_CEILING_MGDL
 
     /**
      * Looks at one tick. This function writes nothing, so the verdict can be worked out and
-     * exported on every tick even when the feature is off. That way the effect can be measured
-     * before it is turned on, the same way upstream ships `RiseCeilingGuard`.
-     *
-     * @param bgMinSinceArmMgdl lowest glucose since the meal was declared — see [TROUGH_MAX_MGDL].
+     * reported on every tick even when the feature is off. That way the effect can be measured
+     * before it is turned on.
      */
-    fun evaluate(
-        preferences: Preferences,
-        now: Long,
-        iobU: Double,
-        declaredCobG: Double,
-        bgMgdl: Double,
-        deltaMgdl: Double,
-        bgMinSinceArmMgdl: Double?,
-    ): Verdict {
+    fun evaluate(preferences: Preferences, now: Long, declaredCobG: Double, bgMgdl: Double): Verdict {
         if (declaredCobG > 0.0) return Verdict.INACTIVE
-        val elapsedMs = MealKnownGate.msSinceArm(preferences, now) ?: return Verdict.INACTIVE
-        val elapsedMin = elapsedMs / MIN_MS
+        if (!bgMgdl.isFinite() || bgMgdl <= 0.0) return Verdict.INACTIVE
+        val elapsedMin = (MealKnownGate.msSinceArm(preferences, now) ?: return Verdict.INACTIVE) / MIN_MS
         if (elapsedMin < MIN_ELAPSED_MIN || elapsedMin > MAX_ELAPSED_MIN) return Verdict.INACTIVE
-        if (iobU < MIN_IOB_U) return Verdict.INACTIVE
-        if (bgMgdl < MIN_BG_MGDL) return Verdict.INACTIVE
-        if (deltaMgdl < MIN_DELTA_MGDL) return Verdict.INACTIVE
-        // Shape: a tail, not a meal that never came down. A fat plateau is left alone on purpose.
-        val trough = bgMinSinceArmMgdl ?: return Verdict.INACTIVE
-        if (!looksLikeSecondRise(bgMgdl, trough)) {
-            return Verdict(active = false, factor = null, reason = "plateau t+${elapsedMin}min trough=${trough.toInt()} — left alone")
-        }
+        val shape = MealKnownGate.bgShape(preferences) ?: return Verdict.INACTIVE
+        if (!firstWaveCameDown(shape.startMgdl, shape.peakMgdl, shape.troughMgdl)) return Verdict.INACTIVE
 
-        val factor = dampingFactor(elapsedMin)
-        return Verdict(
-            active = true,
-            factor = factor,
-            reason = "tail t+${elapsedMin}min iob=${"%.1f".format(iobU)}U " +
-                "trough=${trough.toInt()} ×${"%.2f".format(factor)}",
-        )
+        val rise = bgMgdl - shape.troughMgdl
+        val where = "t+${elapsedMin}min +${rise.toInt()}/${PROOF_MGDL.toInt()} over trough " +
+            "${shape.troughMgdl.toInt()} (peak ${shape.peakMgdl.toInt()})"
+        return when {
+            holds(bgMgdl, shape.startMgdl, shape.peakMgdl, shape.troughMgdl) ->
+                Verdict(hold = true, reason = "2nd rise held $where")
+            bgMgdl >= HOLD_CEILING_MGDL -> Verdict(hold = false, reason = "2nd rise above ${HOLD_CEILING_MGDL.toInt()}, left alone $where")
+            else -> Verdict(hold = false, reason = "2nd rise proven $where")
+        }
     }
 }
