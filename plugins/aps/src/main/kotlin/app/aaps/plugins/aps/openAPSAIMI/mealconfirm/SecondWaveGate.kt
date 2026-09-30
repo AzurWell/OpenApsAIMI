@@ -40,6 +40,10 @@ import app.aaps.core.keys.interfaces.Preferences
  *   [HOLD_CEILING_MGDL] nothing is held.
  * - **A new declaration.** Pressing "eating" again, or a new meal bolus, restarts the meal and its
  *   glucose history: the user saying "more is coming" beats this gate.
+ * - **A rise that is not read as a meal anyway.** Once the declaration is over (with "a meal must
+ *   be declared"), or after a "not eating" answer, the loop no longer doses a rise like a meal, so
+ *   there is nothing of the meal treatment left to hold. Holding there only blocked the small
+ *   corrections of a flat 145-170 after a slow dinner, for two hours, with glucose never under 143.
  *
  * ## Why not the earlier damper
  * The previous version scaled the SMB down with the age of the meal, only above 140 mg/dL and with
@@ -103,8 +107,18 @@ object SecondWaveGate {
      * Looks at one tick. This function writes nothing, so the verdict can be worked out and
      * reported on every tick even when the feature is off. That way the effect can be measured
      * before it is turned on.
+     *
+     * @param mealBlocked true when the loop does not read a rise as a meal on this tick, see
+     * [MealConfirmationGate.isMealInterpretationBlocked].
      */
-    fun evaluate(preferences: Preferences, now: Long, declaredCobG: Double, bgMgdl: Double): Verdict {
+    fun evaluate(
+        preferences: Preferences,
+        now: Long,
+        declaredCobG: Double,
+        bgMgdl: Double,
+        mealBlocked: Boolean = false,
+    ): Verdict {
+        if (mealBlocked) return Verdict.INACTIVE
         if (declaredCobG > 0.0) return Verdict.INACTIVE
         if (!bgMgdl.isFinite() || bgMgdl <= 0.0) return Verdict.INACTIVE
         val elapsedMin = (MealKnownGate.msSinceArm(preferences, now) ?: return Verdict.INACTIVE) / MIN_MS
