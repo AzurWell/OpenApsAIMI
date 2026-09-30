@@ -122,6 +122,21 @@ class SecondWaveGateTest {
         assertThat(SecondWaveGate.evaluate(p, t0 + 200 * min, declaredCobG = 0.0, bgMgdl = 150.0).hold).isFalse()
     }
 
+    /**
+     * Once the rise is no longer read as a meal (declaration over, or "not eating"), the gate
+     * stays out: a flat high plateau after a slow dinner keeps its small corrections.
+     */
+    @Test
+    fun aRiseThatIsNotReadAsAMealIsNotHeld() {
+        val p = prefs()
+        MealKnownGate.arm(p, t0)
+        listOf(150, 198, 165).forEach { MealKnownGate.trackBg(p, it.toDouble()) }
+        val inMeal = SecondWaveGate.evaluate(p, t0 + 220 * min, declaredCobG = 0.0, bgMgdl = 165.0)
+        val afterMeal = SecondWaveGate.evaluate(p, t0 + 250 * min, declaredCobG = 0.0, bgMgdl = 165.0, mealBlocked = true)
+        assertThat(inMeal.hold).isTrue()
+        assertThat(afterMeal.hold).isFalse()
+    }
+
     /** Declared carbs give the loop its own memory of the meal: the gate stays out. */
     @Test
     fun declaredCarbsLeaveTheGateOut() {
