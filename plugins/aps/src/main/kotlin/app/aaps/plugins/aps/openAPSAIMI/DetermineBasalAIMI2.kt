@@ -19390,7 +19390,12 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 profile.current_basal_safety_multiplier * profile.current_basal
             )
         )
-        val ceiling = MealConfirmationGate.deniedBasalCeilingUph(bgNow, profile.current_basal, normalMax)
+        val ceiling = MealConfirmationGate.deniedBasalCeilingUph(
+            bgNow,
+            profile.current_basal,
+            normalMax,
+            MealConfirmationGate.elevatedBasalFactor(preferences),
+        )
         if (rate <= ceiling) return
         result.rate = ceiling
         if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
