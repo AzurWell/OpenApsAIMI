@@ -3305,6 +3305,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             now = dateUtil.now(),
             declaredCobG = ctx.mealData.mealCOB,
             bgMgdl = bg,
+            mealBlocked = mealInterpretationBlocked(),
         )
 
         // Reported here and not at the end of the tick: a safety halt (LGS), a T3c bypass or the
