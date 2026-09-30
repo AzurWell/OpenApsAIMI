@@ -1,5 +1,6 @@
 package app.aaps.plugins.aps.openAPSAIMI.mealconfirm
 
+import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.plugins.aps.openAPSAIMI.keys.AimiLongKey
 import java.time.Instant
@@ -134,14 +135,52 @@ object MealConfirmationGate {
      * Over 20 answered rises, 16 still got a basal above 2 U/h, and almost all of them stayed
      * under 180 mg/dL.
      *
-     * - under [DENIED_HYPER_LINE_MGDL]: the profile basal. The rise is not a meal, so no meal extra.
+     * - under [DENIED_ELEVATED_LINE_MGDL]: the profile basal. The rise is not a meal, so no meal extra.
+     * - from [DENIED_ELEVATED_LINE_MGDL] up to [DENIED_HYPER_LINE_MGDL]: the profile basal times
+     *   [elevatedFactor], never above the normal limit. See [elevatedBasalFactor].
      * - from [DENIED_HYPER_LINE_MGDL] up: the normal limit AIMI uses when no meal is active
      *   ([normalMaxBasalUph]), so a real high is still corrected, just not with the meal bypass.
      *
      * This is a ceiling only. It never raises a rate and never touches a suspend.
      */
-    fun deniedBasalCeilingUph(bgMgdl: Double, profileBasalUph: Double, normalMaxBasalUph: Double): Double =
-        if (bgMgdl < DENIED_HYPER_LINE_MGDL) profileBasalUph else maxOf(profileBasalUph, normalMaxBasalUph)
+    fun deniedBasalCeilingUph(
+        bgMgdl: Double,
+        profileBasalUph: Double,
+        normalMaxBasalUph: Double,
+        elevatedFactor: Double = 1.0,
+    ): Double {
+        val highCeiling = maxOf(profileBasalUph, normalMaxBasalUph)
+        return when {
+            bgMgdl >= DENIED_HYPER_LINE_MGDL   -> highCeiling
+            bgMgdl >= DENIED_ELEVATED_LINE_MGDL -> minOf(profileBasalUph * maxOf(1.0, elevatedFactor), highCeiling)
+            else                               -> profileBasalUph
+        }
+    }
+
+    /**
+     * From this glucose up, and under [DENIED_HYPER_LINE_MGDL], the ceiling may sit above the
+     * profile basal.
+     *
+     * With the ceiling at the profile rate all the way to 180, the loop holds a flat 145-170 but
+     * does not bring it down: in a field log three nights out of six stayed on such a plateau while
+     * the loop asked for about 2 U/h more on most ticks. Replayed on those ticks, a ceiling at 1.5
+     * times the profile rate added 0 to 3.5 U per night, nothing on the nights already in range,
+     * and none of these ticks was followed by a glucose under 80 in the next 3 hours.
+     */
+    const val DENIED_ELEVATED_LINE_MGDL = 140.0
+
+    /** Used when [IntKey.OApsAIMINoMealElevatedBasalPct] holds a value outside its own range. */
+    const val DEFAULT_ELEVATED_BASAL_FACTOR = 1.5
+
+    /**
+     * The factor in force between [DENIED_ELEVATED_LINE_MGDL] and [DENIED_HYPER_LINE_MGDL], from
+     * [IntKey.OApsAIMINoMealElevatedBasalPct]. 100 % gives the profile basal all the way to 180.
+     */
+    fun elevatedBasalFactor(preferences: Preferences): Double {
+        val key = IntKey.OApsAIMINoMealElevatedBasalPct
+        val value = preferences.get(key)
+        return if (value in key.min..key.max) value / 100.0 else DEFAULT_ELEVATED_BASAL_FACTOR
+    }
 
     /**
      * True when a rise must not be read as a meal on this tick.
