@@ -1,5 +1,6 @@
 package app.aaps.plugins.aps.openAPSAIMI.mealconfirm
 
+import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.plugins.aps.openAPSAIMI.keys.AimiLongKey
 import com.google.common.truth.Truth.assertThat
@@ -125,6 +126,35 @@ class MealConfirmationGateTest {
     @Test
     fun theCeilingIsNeverBelowTheProfileBasalOnAHigh() {
         assertThat(MealConfirmationGate.deniedBasalCeilingUph(250.0, profileBasal, 0.5)).isEqualTo(profileBasal)
+    }
+
+    /** A flat 150 with no meal may get more than the profile basal, up to the factor. */
+    @Test
+    fun anElevatedGlucoseGetsTheProfileBasalTimesTheFactor() {
+        assertThat(MealConfirmationGate.deniedBasalCeilingUph(140.0, profileBasal, normalMax, 1.5)).isWithin(1e-9).of(1.275)
+        assertThat(MealConfirmationGate.deniedBasalCeilingUph(179.0, profileBasal, normalMax, 1.5)).isWithin(1e-9).of(1.275)
+    }
+
+    /** Under 140 the factor changes nothing: a night already in range is left as it is. */
+    @Test
+    fun theFactorDoesNothingUnderTheElevatedLine() {
+        assertThat(MealConfirmationGate.deniedBasalCeilingUph(139.0, profileBasal, normalMax, 2.0)).isEqualTo(profileBasal)
+    }
+
+    /** The factor never lifts the ceiling above the normal limit, and never lowers it. */
+    @Test
+    fun theFactorStaysBetweenTheProfileBasalAndTheNormalLimit() {
+        assertThat(MealConfirmationGate.deniedBasalCeilingUph(150.0, profileBasal, 1.0, 2.0)).isEqualTo(1.0)
+        assertThat(MealConfirmationGate.deniedBasalCeilingUph(150.0, profileBasal, normalMax, 0.5)).isEqualTo(profileBasal)
+    }
+
+    /** The key gives the factor in percent; a value outside its range falls back to 1.5. */
+    @Test
+    fun theFactorComesFromTheKey() {
+        fun prefs(pct: Int) = mockk<Preferences> { every { get(IntKey.OApsAIMINoMealElevatedBasalPct) } returns pct }
+        assertThat(MealConfirmationGate.elevatedBasalFactor(prefs(100))).isEqualTo(1.0)
+        assertThat(MealConfirmationGate.elevatedBasalFactor(prefs(180))).isEqualTo(1.8)
+        assertThat(MealConfirmationGate.elevatedBasalFactor(prefs(0))).isEqualTo(MealConfirmationGate.DEFAULT_ELEVATED_BASAL_FACTOR)
     }
 
     // -----------------------------------------------------------------------------------------
