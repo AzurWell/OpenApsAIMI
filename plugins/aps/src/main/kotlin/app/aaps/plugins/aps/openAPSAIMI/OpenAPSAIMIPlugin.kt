@@ -2390,6 +2390,7 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
                 add(DoubleKey.OApsAIMIAnticipBudgetU)
                 add(BooleanKey.OApsAIMIAnticipMealEvidence)
                 add(BooleanKey.OApsAIMISecondWaveGuard)
+                add(BooleanKey.OApsAIMIBolusEarlyCap)
                 add(BooleanKey.OApsAIMIMealRequiresDeclaration)
                 add(IntKey.OApsAIMIDeclaredMealHorizonMin)
                 add(IntKey.OApsAIMINoMealElevatedBasalPct)
