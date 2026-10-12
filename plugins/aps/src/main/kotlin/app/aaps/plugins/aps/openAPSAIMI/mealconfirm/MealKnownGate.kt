@@ -144,6 +144,12 @@ object MealKnownGate {
         return if (armedAt > 0L && now >= armedAt) now - armedAt else null
     }
 
+    /**
+     * Time of the manual bolus that opened the meal window, or 0. An eating note pressed after the
+     * bolus keeps it: the bolus is still acting. A "correction" note clears it with the window.
+     */
+    fun bolusAtMs(preferences: Preferences): Long = preferences.get(AimiLongKey.MealKnownBolusAt)
+
     /** Milliseconds since the window was opened, or null when no meal is known. */
     fun elapsedSinceArmMs(preferences: Preferences, now: Long): Long? {
         if (!isMealKnown(preferences, now)) return null
@@ -207,6 +213,7 @@ object MealKnownGate {
     fun clear(preferences: Preferences) {
         preferences.put(AimiLongKey.MealKnownUntil, 0L)
         preferences.put(AimiLongKey.MealKnownArmedAt, 0L)
+        preferences.put(AimiLongKey.MealKnownBolusAt, 0L)
         resetBgShape(preferences)
     }
 
@@ -248,6 +255,7 @@ object MealKnownGate {
         // two ticks apart; after an install or a restart the bolus can be much older, and anchoring
         // on it is what keeps the second-rise elapsed time honest instead of restarting the clock.
         arm(preferences, candidate.timestamp.coerceAtMost(now))
+        preferences.put(AimiLongKey.MealKnownBolusAt, candidate.timestamp.coerceAtMost(now))
         return candidate
     }
 
