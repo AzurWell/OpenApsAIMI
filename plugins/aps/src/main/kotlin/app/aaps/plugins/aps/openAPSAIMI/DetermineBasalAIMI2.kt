@@ -67,6 +67,7 @@ import app.aaps.plugins.aps.openAPSAIMI.utils.AimiStorageHelper
 import app.aaps.plugins.aps.openAPSAIMI.model.Constants
 import app.aaps.core.data.model.HR
 import app.aaps.plugins.aps.openAPSAIMI.model.DecisionResult
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.BolusEarlyCapGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationPrompt
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealKnownGate
@@ -19702,6 +19703,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             AimiDetermineBasalTickOrchestrator.run(this, ctx).also {
                 applyMealDeniedBasalCap(it, ctx)
                 applySecondWaveHold(it, ctx)
+                applyBolusEarlyCap(it, ctx)
             }
         }
     }
@@ -19775,6 +19777,56 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             (if (smb > 0.0) " SMB ${"%.2f".format(smb)}→0" else "") +
             (if (basalOver) " basal ${"%.2f".format(rate)}→${"%.2f".format(scheduled)}U/h" else "")
         consoleLog.add("🌊 $line (${lastSecondWaveVerdict.reason})")
+        result.reason.append(" [$line]")
+    }
+
+    /**
+     * The first 30 minutes after the user's own meal bolus: at most 1 U of SMB on top of it, and no
+     * basal above the scheduled rate. See [BolusEarlyCapGate].
+     *
+     * On the tick result, after every path has written its dose, for the same reason as
+     * [applySecondWaveHold]. When the key is off, the tick says what it would have cut, so the rule
+     * can be read on real meals before it doses anything.
+     */
+    private fun applyBolusEarlyCap(result: RT, ctx: AimiTickContext) {
+        val now = dateUtil.now()
+        val bolusAt = MealKnownGate.bolusAtMs(preferences)
+        if (bolusAt <= 0L) return
+        val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
+        val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp }
+        val smb = result.units ?: 0.0
+        val smbSince = mealGateBoluses(now)
+            .filter { it.isValid && it.type == BS.Type.SMB && it.timestamp > bolusAt }
+            .sumOf { it.amount }
+        val decision = BolusEarlyCapGate.evaluate(
+            now = now,
+            bolusAtMs = bolusAt,
+            mealKnown = MealKnownGate.isMealKnown(preferences, now),
+            smbSinceBolusU = smbSince,
+            proposedSmbU = smb,
+            proposedRateUph = rate,
+            scheduledUph = ctx.profile.current_basal,
+        )
+        if (!decision.active) return
+        val status = "⏱️ bolus-early t+${decision.minutesSinceBolus}min SMB ${"%.2f".format(decision.smbSpentU)}/${"%.1f".format(BolusEarlyCapGate.SMB_BUDGET_U)}U"
+        consoleLog.add(status)
+        result.reason.append(" $status")
+        if (!decision.cuts(smb, rate)) return
+        val applied = preferences.get(BooleanKey.OApsAIMIBolusEarlyCap)
+        val smbCut = decision.smbAllowedU < smb
+        val allowedRate = decision.rateAllowedUph
+        val rateCut = rate != null && allowedRate != null && allowedRate < rate
+        if (applied) {
+            if (smbCut) result.units = decision.smbAllowedU
+            if (rateCut) {
+                result.rate = allowedRate
+                if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
+            }
+        }
+        val line = (if (applied) "BOLUS_EARLY_CAP" else "BOLUS_EARLY_CAP(shadow)") +
+            (if (smbCut) " SMB ${"%.2f".format(smb)}→${"%.2f".format(decision.smbAllowedU)}" else "") +
+            (if (rateCut) " basal ${"%.2f".format(rate)}→${"%.2f".format(allowedRate)}U/h" else "")
+        consoleLog.add("⏱️ $line")
         result.reason.append(" [$line]")
     }
 
