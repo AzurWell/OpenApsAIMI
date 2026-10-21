@@ -12556,13 +12556,18 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         ).also { lastCoffeeVerdict = it }
     }
 
-    /** A meal is declared now: a meal mode is active, or a meal note is younger than 3 h (4 h high-carb). */
+    /**
+     * A meal is declared now: a meal mode is active, or a meal note is younger than 3 h (4 h high-carb),
+     * or the meal window of [MealKnownGate] is open (a manual meal bolus or the eating note, 3 h).
+     * The user who declares meals that way uses no meal mode, and their meals must keep the same
+     * exemption as a meal mode.
+     */
     private fun declaredMealWindowActive(): Boolean = DynamicBasalStackCap.declaredMealActive(
         anyMealModeActive = mealTime || bfastTime || lunchTime || dinnerTime || highCarbTime || snackTime ||
             fclTime || anticipTime,
         lastDeclaredMealAgeMin = lastDeclaredMeal?.ageMin,
         lastDeclaredMealHighCarb = lastDeclaredMeal?.highCarb == true,
-    )
+    ) || MealKnownGate.isMealKnown(preferences, dateUtil.now())
 
     /** ISF for the stack cap: the dose ISF when known, else the variable sensitivity. */
     private fun stackCapIsf(): Double? =
