@@ -15741,19 +15741,8 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                     consoleLog.add("🪶 PRED_GAP: ${lastPredictionGapVerdict.reason}")
                     rT.reason.append("🪶 ").append(lastPredictionGapVerdict.reason).append(" ")
                 }
-                if (preferences.get(BooleanKey.OApsAIMIPredictionGapDamper)) {
-                    lastPredictionGapVerdict.factor?.let { factor ->
-                        val damped = finalUnits * factor
-                        if (damped < finalUnits) {
-                            consoleLog.add(
-                                "🪶 PRED_GAP_DAMP: ${"%.2f".format(Locale.US, finalUnits)}→" +
-                                    "${"%.2f".format(Locale.US, damped)}U (${lastPredictionGapVerdict.reason})"
-                            )
-                            rT.reason.append("🪶gap×${"%.2f".format(Locale.US, factor)} ")
-                            finalUnits = damped.coerceAtLeast(0.0)
-                        }
-                    }
-                }
+                // Verdict only: never measured as separating good doses from bad ones, so it has no
+                // switch and never changes the dose.
                 // Cumulative early-window SMB budget (Q5): a past hard effort cannot stack context-SMB
                 // into an overshoot even with prolonged high BG. Per SlowCarbMeal window, reset on change.
                 val slowCarbEarlyStart = lastContextSnapshot?.activeIntents

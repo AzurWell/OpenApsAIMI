@@ -303,7 +303,6 @@ internal object AimiSettingsManifest {
         AimiSettingEntry(BooleanKey.OApsAIMIMealRequiresDeclaration, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.USER),
         AimiSettingEntry(IntKey.OApsAIMIDeclaredMealHorizonMin, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.USER),
         AimiSettingEntry(IntKey.OApsAIMINoMealElevatedBasalPct, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
-        AimiSettingEntry(BooleanKey.OApsAIMIPredictionGapDamper, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
         AimiSettingEntry(BooleanKey.OApsAIMIRiseCeilingGuard, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
         AimiSettingEntry(BooleanKey.OApsAIMIEffortActivityProtection, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Physio, AimiSettingsWriter.USER),
         AimiSettingEntry(BooleanKey.OApsAIMIautoDriveAuthoritative, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Autonomy, AimiSettingsWriter.SLIDER),
