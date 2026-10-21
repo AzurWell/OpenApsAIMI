@@ -18,12 +18,14 @@ import app.aaps.plugins.aps.openAPSAIMI.keys.AimiLongKey
  * never raises a cap. Other code can ask "is a meal already running?" without paying for a mode.
  *
  * Three things arm it, and none of them asks the user for a number:
- *  - a **manual bolus** given in meal-like conditions: the user's own prebolus is the declaration;
+ *  - a **manual bolus**, at any glucose: the user's own prebolus is the declaration;
  *  - a note holding "eating", written by an AAPS Automation: the light meal button;
  *  - an explicit "I am eating" answer, through [MealConfirmationGate].
  *
- * Same rule as [MealConfirmationGate]: **silence keeps today's behaviour**. A bolus that is not
- * clearly a meal bolus arms nothing, so a doubt can never under-dose a real meal.
+ * A bolus is a meal unless the user says otherwise with the "correction" note
+ * ([applyCorrectionNote]). Glucose does not decide it: a meal can start high, and a bolus given at
+ * 181 mg/dL right before dinner, in a field log, was once read as a correction and the whole
+ * dinner got no meal treatment at all.
  */
 object MealKnownGate {
 
@@ -52,24 +54,6 @@ object MealKnownGate {
 
     /** Under this, a bolus is a correction or an SMB, not a meal prebolus. */
     const val MANUAL_BOLUS_MEAL_THRESHOLD_U = MealConfirmationGate.MANUAL_BOLUS_MEAL_THRESHOLD_U
-
-    /**
-     * A prebolus is given near normal glucose, before the rise. A correction is given high.
-     *
-     * Checked against real boluses from the user this was written for: 5 U at 110 mg/dL before a
-     * pastry (meal), 3 U at 112 mg/dL (meal), 7 U at 333 mg/dL while falling (correction), 5 U at
-     * over 250 mg/dL at night against a hyper that would not come down (correction). This ceiling
-     * separates the two groups cleanly.
-     */
-    const val MEAL_BG_CEILING_MGDL = 180.0
-
-    /**
-     * Falling fast means the bolus follows something that is already covered, so it does not open
-     * a meal. Only used above [MEAL_FALLING_GUARD_BG_MGDL], because a prebolus taken while glucose
-     * drifts down slowly near target is still a prebolus.
-     */
-    const val MEAL_FALLING_DELTA_MGDL = -3.0
-    const val MEAL_FALLING_GUARD_BG_MGDL = 140.0
 
     private const val MIN_MS = 60_000L
 
@@ -218,8 +202,8 @@ object MealKnownGate {
     }
 
     /**
-     * Reads the user's own gesture. A manual bolus that is big enough, given in meal-like
-     * conditions, opens the meal window with nothing else to do.
+     * Reads the user's own gesture. A manual bolus that is big enough opens the meal window with
+     * nothing else to do, unless a "correction" note sits next to it ([isShieldedByCorrectionNote]).
      *
      * Only [BS.Type.NORMAL] counts, because an SMB is the loop's own dose and says nothing about
      * what the user is doing. Each bolus is looked at once only
@@ -227,16 +211,12 @@ object MealKnownGate {
      * window further away on every tick.
      *
      * @param boluses recent boluses, in any order.
-     * @param bgMgdl glucose now. The bolus is seen one or two ticks after it was given.
-     * @param deltaMgdl short delta now, used only to reject a bolus that follows a fast fall.
      * @return the bolus that opened the window, or null when nothing was opened.
      */
     fun armFromManualBolus(
         preferences: Preferences,
         now: Long,
         boluses: List<BS>,
-        bgMgdl: Double,
-        deltaMgdl: Double,
     ): BS? {
         val lastSeen = preferences.get(AimiLongKey.MealKnownLastBolusMs)
         val candidate = boluses
@@ -248,7 +228,6 @@ object MealKnownGate {
 
         // Mark it as seen either way, so a correction is not looked at again on every later tick.
         preferences.put(AimiLongKey.MealKnownLastBolusMs, candidate.timestamp)
-        if (!looksLikeMealBolus(bgMgdl, deltaMgdl)) return null
         if (isShieldedByCorrectionNote(preferences, candidate.timestamp)) return null
 
         // The meal started when the bolus was given, not when the tick noticed it. Normally one or
@@ -282,8 +261,8 @@ object MealKnownGate {
      * "correction", and the meal window closes.
      *
      * Written for a morning in a field log: a 1.5 U correction at 145 mg/dL, before a site change,
-     * passed [looksLikeMealBolus] and opened four hours of meal treatment with nothing eaten. The
-     * glucose test cannot tell that bolus from a prebolus, only the user can.
+     * opened four hours of meal treatment with nothing eaten. Glucose cannot tell that bolus from a
+     * prebolus, only the user can.
      *
      * An eating note newer than this note wins and keeps its window. A manual bolus within
      * [CORRECTION_SHIELD_MIN] of it is the correction itself and opens nothing
@@ -307,13 +286,6 @@ object MealKnownGate {
     fun isShieldedByCorrectionNote(preferences: Preferences, bolusMs: Long): Boolean {
         val noteMs = preferences.get(AimiLongKey.MealKnownLastCorrectionNoteMs)
         return noteMs > 0L && kotlin.math.abs(bolusMs - noteMs) <= CORRECTION_SHIELD_MIN * MIN_MS
-    }
-
-    /** The test that tells a meal prebolus from a correction. Kept apart so it can be unit tested. */
-    fun looksLikeMealBolus(bgMgdl: Double, deltaMgdl: Double): Boolean {
-        if (bgMgdl > MEAL_BG_CEILING_MGDL) return false
-        if (bgMgdl > MEAL_FALLING_GUARD_BG_MGDL && deltaMgdl <= MEAL_FALLING_DELTA_MGDL) return false
-        return true
     }
 
     /** Short state line for `rT.reason` and the logs. */

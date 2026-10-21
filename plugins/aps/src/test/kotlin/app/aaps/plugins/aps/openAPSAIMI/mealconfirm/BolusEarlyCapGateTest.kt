@@ -102,7 +102,7 @@ class BolusEarlyCapGateTest {
     @Test
     fun aMealBolusRecordsItsTime() {
         val p = prefs()
-        MealKnownGate.armFromManualBolus(p, t0 + min, listOf(bolus(t0)), 120.0, 1.0)
+        MealKnownGate.armFromManualBolus(p, t0 + min, listOf(bolus(t0)))
         assertThat(MealKnownGate.bolusAtMs(p)).isEqualTo(t0)
     }
 
@@ -118,7 +118,7 @@ class BolusEarlyCapGateTest {
     @Test
     fun anEatingNoteAfterTheBolusKeepsTheBolusTime() {
         val p = prefs()
-        MealKnownGate.armFromManualBolus(p, t0 + min, listOf(bolus(t0)), 120.0, 1.0)
+        MealKnownGate.armFromManualBolus(p, t0 + min, listOf(bolus(t0)))
         MealKnownGate.armFromNote(p, t0 + 5 * min, t0 + 5 * min)
         assertThat(MealKnownGate.bolusAtMs(p)).isEqualTo(t0)
     }
@@ -126,16 +126,17 @@ class BolusEarlyCapGateTest {
     @Test
     fun aCorrectionNoteClearsTheBolusTime() {
         val p = prefs()
-        MealKnownGate.armFromManualBolus(p, t0 + min, listOf(bolus(t0)), 120.0, 1.0)
+        MealKnownGate.armFromManualBolus(p, t0 + min, listOf(bolus(t0)))
         MealKnownGate.applyCorrectionNote(p, t0 + 5 * min)
         assertThat(MealKnownGate.bolusAtMs(p)).isEqualTo(0L)
     }
 
-    /** A correction at high glucose opens no meal, so it records nothing. */
+    /** A correction told by its note opens no meal, so it records nothing. */
     @Test
-    fun aHighCorrectionBolusRecordsNothing() {
+    fun aCorrectionBolusRecordsNothing() {
         val p = prefs()
-        MealKnownGate.armFromManualBolus(p, t0 + min, listOf(bolus(t0, 2.0)), 214.0, 2.0)
+        MealKnownGate.applyCorrectionNote(p, t0)
+        MealKnownGate.armFromManualBolus(p, t0 + min, listOf(bolus(t0, 2.0)))
         assertThat(MealKnownGate.bolusAtMs(p)).isEqualTo(0L)
     }
 }
