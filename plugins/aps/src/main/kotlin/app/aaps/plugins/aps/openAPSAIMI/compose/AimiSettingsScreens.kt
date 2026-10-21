@@ -1104,6 +1104,7 @@ internal object AimiSettingsScreens {
                 BooleanKey.OApsAIMIAnticipMealEvidence,
                 BooleanKey.OApsAIMISecondWaveGuard,
                 BooleanKey.OApsAIMIBolusEarlyCap,
+                BooleanKey.OApsAIMILateWaveIobCap,
                 BooleanKey.OApsAIMIMealRequiresDeclaration,
                 IntKey.OApsAIMIDeclaredMealHorizonMin,
                 IntKey.OApsAIMINoMealElevatedBasalPct,
