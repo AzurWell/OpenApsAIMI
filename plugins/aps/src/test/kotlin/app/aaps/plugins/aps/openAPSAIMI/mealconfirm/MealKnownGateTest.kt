@@ -5,95 +5,16 @@ import app.aaps.core.data.model.ICfg
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.interfaces.LongNonPreferenceKey
 import app.aaps.core.keys.interfaces.Preferences
-import app.aaps.plugins.aps.openAPSAIMI.keys.AimiLongKey
 import com.google.common.truth.Truth.assertThat
 import io.mockk.every
 import io.mockk.mockk
 import org.junit.jupiter.api.Test
 
 /**
- * Locks the test that tells a meal prebolus from a correction.
- *
- * The four reference cases are real boluses from the user this gate was written for. They are the
- * whole reason the gate can read a gesture instead of asking a question, so they are pinned here
- * with their measured numbers.
+ * Locks how a meal is declared: a manual bolus or the eating note opens it, a "correction" note
+ * next to a bolus keeps it closed, and the user sets how long it lasts.
  */
 class MealKnownGateTest {
-
-    // -----------------------------------------------------------------------------------------
-    // Reference cases — real boluses
-    // -----------------------------------------------------------------------------------------
-
-    /** Morning pastry: 5 U given at 110 mg/dL, before the rise. */
-    @Test
-    fun pastryPrebolusIsAMeal() {
-        assertThat(MealKnownGate.looksLikeMealBolus(bgMgdl = 110.0, deltaMgdl = 0.5)).isTrue()
-    }
-
-    /** Lunch of 2026-08-13: 3 U given at 112 mg/dL. */
-    @Test
-    fun lunchPrebolusIsAMeal() {
-        assertThat(MealKnownGate.looksLikeMealBolus(bgMgdl = 112.0, deltaMgdl = 1.0)).isTrue()
-    }
-
-    /** 2026-07-12, 15:30: 7 U given by hand at 333 mg/dL while falling. A correction. */
-    @Test
-    fun highFallingBolusIsACorrection() {
-        assertThat(MealKnownGate.looksLikeMealBolus(bgMgdl = 333.0, deltaMgdl = -5.0)).isFalse()
-    }
-
-    /** Night-time hyper that would not come down: 5 U at 255 mg/dL, flat. A correction. */
-    @Test
-    fun nightHyperBolusIsACorrection() {
-        assertThat(MealKnownGate.looksLikeMealBolus(bgMgdl = 255.0, deltaMgdl = 0.0)).isFalse()
-    }
-
-    // -----------------------------------------------------------------------------------------
-    // One case per condition
-    // -----------------------------------------------------------------------------------------
-
-    /** Right on the ceiling still counts as a meal; the test is "above the ceiling". */
-    @Test
-    fun exactlyAtTheCeilingIsStillAMeal() {
-        assertThat(
-            MealKnownGate.looksLikeMealBolus(
-                bgMgdl = MealKnownGate.MEAL_BG_CEILING_MGDL,
-                deltaMgdl = 0.0,
-            )
-        ).isTrue()
-    }
-
-    /** One mg/dL above the ceiling is a correction. */
-    @Test
-    fun justAboveTheCeilingIsACorrection() {
-        assertThat(
-            MealKnownGate.looksLikeMealBolus(
-                bgMgdl = MealKnownGate.MEAL_BG_CEILING_MGDL + 1.0,
-                deltaMgdl = 0.0,
-            )
-        ).isFalse()
-    }
-
-    /**
-     * A prebolus taken while glucose drifts down slowly near target is still a prebolus: the
-     * falling test only applies above [MealKnownGate.MEAL_FALLING_GUARD_BG_MGDL].
-     */
-    @Test
-    fun fallingNearTargetIsStillAMeal() {
-        assertThat(MealKnownGate.looksLikeMealBolus(bgMgdl = 105.0, deltaMgdl = -6.0)).isTrue()
-    }
-
-    /** Falling fast well above target means the bolus follows something already covered. */
-    @Test
-    fun fallingFastHighIsACorrection() {
-        assertThat(MealKnownGate.looksLikeMealBolus(bgMgdl = 165.0, deltaMgdl = -4.0)).isFalse()
-    }
-
-    /** Same glucose, but flat: nothing says this is a correction, so it opens a meal. */
-    @Test
-    fun flatHighButUnderTheCeilingIsAMeal() {
-        assertThat(MealKnownGate.looksLikeMealBolus(bgMgdl = 165.0, deltaMgdl = 0.0)).isTrue()
-    }
 
     // -----------------------------------------------------------------------------------------
     // Declared meal duration, set by the user
@@ -151,11 +72,28 @@ class MealKnownGateTest {
     // "This bolus is a correction"
     // -----------------------------------------------------------------------------------------
 
+    /** A bolus given high is a meal too: a dinner can start above 180 mg/dL. */
+    @Test
+    fun aBolusGivenHighOpensTheWindow() {
+        val p = prefs()
+        assertThat(MealKnownGate.armFromManualBolus(p, t0 + min, listOf(bolus(t0, 3.0)))).isNotNull()
+        assertThat(MealKnownGate.isMealKnown(p, t0 + 2 * min)).isTrue()
+    }
+
+    /** A correction given high is told apart by the note, not by glucose. */
+    @Test
+    fun aHighCorrectionWithItsNoteOpensNothing() {
+        val p = prefs()
+        MealKnownGate.applyCorrectionNote(p, t0)
+        assertThat(MealKnownGate.armFromManualBolus(p, t0 + 3 * min, listOf(bolus(t0 + 2 * min, 3.0)))).isNull()
+        assertThat(MealKnownGate.isMealKnown(p, t0 + 3 * min)).isFalse()
+    }
+
     /** Bolus first, button a few minutes later: the window the bolus opened is closed. */
     @Test
     fun theCorrectionNoteClosesTheWindowABolusOpened() {
         val p = prefs()
-        assertThat(MealKnownGate.armFromManualBolus(p, t0 + min, listOf(bolus(t0)), 145.0, 0.0)).isNotNull()
+        assertThat(MealKnownGate.armFromManualBolus(p, t0 + min, listOf(bolus(t0)))).isNotNull()
         assertThat(MealKnownGate.applyCorrectionNote(p, t0 + 10 * min)).isTrue()
         assertThat(MealKnownGate.isWithinDeclaredMeal(p, t0 + 11 * min)).isFalse()
         assertThat(MealKnownGate.isMealKnown(p, t0 + 11 * min)).isFalse()
@@ -166,7 +104,7 @@ class MealKnownGateTest {
     fun aBolusRightAfterTheCorrectionNoteOpensNothing() {
         val p = prefs()
         MealKnownGate.applyCorrectionNote(p, t0)
-        assertThat(MealKnownGate.armFromManualBolus(p, t0 + 5 * min, listOf(bolus(t0 + 3 * min)), 145.0, 0.0)).isNull()
+        assertThat(MealKnownGate.armFromManualBolus(p, t0 + 5 * min, listOf(bolus(t0 + 3 * min)))).isNull()
         assertThat(MealKnownGate.isWithinDeclaredMeal(p, t0 + 5 * min)).isFalse()
     }
 
@@ -175,7 +113,7 @@ class MealKnownGateTest {
     fun aMealBolusLongAfterTheCorrectionNoteStillOpensTheWindow() {
         val p = prefs()
         MealKnownGate.applyCorrectionNote(p, t0)
-        assertThat(MealKnownGate.armFromManualBolus(p, t0 + 61 * min, listOf(bolus(t0 + 60 * min)), 110.0, 0.0)).isNotNull()
+        assertThat(MealKnownGate.armFromManualBolus(p, t0 + 61 * min, listOf(bolus(t0 + 60 * min)))).isNotNull()
     }
 
     /** An eating note pressed after the correction note wins: the meal stays declared. */
