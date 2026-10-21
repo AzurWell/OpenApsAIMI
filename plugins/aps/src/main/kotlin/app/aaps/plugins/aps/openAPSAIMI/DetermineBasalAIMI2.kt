@@ -3392,8 +3392,6 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             preferences = preferences,
             now = dateUtil.now(),
             boluses = mealGateBoluses(dateUtil.now()),
-            bgMgdl = bg,
-            deltaMgdl = delta.toDouble(),
         )?.let { armed ->
             consoleLog.add(
                 "🍽️ MEAL_KNOWN: armed by manual bolus ${"%.2f".format(Locale.US, armed.amount)}U " +
