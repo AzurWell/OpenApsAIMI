@@ -73,6 +73,7 @@ import app.aaps.plugins.aps.openAPSAIMI.model.Constants
 import app.aaps.core.data.model.HR
 import app.aaps.plugins.aps.openAPSAIMI.model.DecisionResult
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.BolusEarlyCapGate
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.LateWaveGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationPrompt
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealKnownGate
@@ -20157,6 +20158,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 applyMealDeniedBasalCap(it, ctx)
                 applySecondWaveHold(it, ctx)
                 applyBolusEarlyCap(it, ctx)
+                applyLateWaveCap(it, ctx)
             }
         }
     }
@@ -20280,6 +20282,58 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             (if (smbCut) " SMB ${"%.2f".format(smb)}→${"%.2f".format(decision.smbAllowedU)}" else "") +
             (if (rateCut) " basal ${"%.2f".format(rate)}→${"%.2f".format(allowedRate)}U/h" else "")
         consoleLog.add("⏱️ $line")
+        result.reason.append(" [$line]")
+    }
+
+    /**
+     * A late second wave that starts suddenly after a long flat: the loop's own insulin may not take
+     * the insulin on board above 4 U for 2 hours after the proof. See [LateWaveGate].
+     *
+     * On the tick result, after every path has written its dose, for the same reason as
+     * [applySecondWaveHold]. When the key is off, the tick says what it would have cut, so the rule
+     * can be read on real meals before it doses anything.
+     */
+    private fun applyLateWaveCap(result: RT, ctx: AimiTickContext) {
+        val now = dateUtil.now()
+        val elapsed = MealKnownGate.msSinceArm(preferences, now) ?: return
+        val armedAt = now - elapsed
+        val readings = (iobCobCalculator.ads.getBucketedDataTableCopy() ?: return)
+            .filter { !it.filledGap && it.timestamp >= armedAt }
+            .map { LateWaveGate.Reading(it.timestamp, it.recalculated) }
+        val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
+        val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp }
+        val smb = result.units ?: 0.0
+        val decision = LateWaveGate.evaluate(
+            now = now,
+            armedAtMs = armedAt,
+            readings = readings,
+            iobU = ctx.iobDataArray.firstOrNull()?.iob ?: return,
+            proposedSmbU = smb,
+            proposedRateUph = rate,
+            scheduledUph = ctx.profile.current_basal,
+        )
+        val wave = decision.wave ?: return
+        val status = "🐢 late-wave t+${decision.minutesSinceProof}min after proof (meal t+${wave.delayMin}min, " +
+            "flat ${wave.flatMin}min, +${LateWaveGate.PROOF_MGDL.toInt()} in ${wave.riseMin}min) " +
+            "IOB ${"%.2f".format(decision.iobU)}/${"%.1f".format(LateWaveGate.IOB_CAP_U)}U"
+        consoleLog.add(status)
+        result.reason.append(" $status")
+        if (!decision.cuts(smb, rate)) return
+        val applied = preferences.get(BooleanKey.OApsAIMILateWaveIobCap)
+        val smbCut = decision.smbAllowedU < smb
+        val allowedRate = decision.rateAllowedUph
+        val rateCut = rate != null && allowedRate != null && allowedRate < rate
+        if (applied) {
+            if (smbCut) result.units = decision.smbAllowedU
+            if (rateCut) {
+                result.rate = allowedRate
+                if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
+            }
+        }
+        val line = (if (applied) "LATE_WAVE_CAP" else "LATE_WAVE_CAP(shadow)") +
+            (if (smbCut) " SMB ${"%.2f".format(smb)}→${"%.2f".format(decision.smbAllowedU)}" else "") +
+            (if (rateCut) " basal ${"%.2f".format(rate)}→${"%.2f".format(allowedRate)}U/h" else "")
+        consoleLog.add("🐢 $line")
         result.reason.append(" [$line]")
     }
 

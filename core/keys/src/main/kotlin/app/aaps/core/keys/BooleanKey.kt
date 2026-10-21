@@ -409,6 +409,12 @@ enum class BooleanKey(
         titleResId = R.string.pref_title_aimi_bolus_early_cap,
         summaryResId = R.string.pref_summary_aimi_bolus_early_cap,
     ),
+    OApsAIMILateWaveIobCap(
+        key = "key_aimi_late_wave_iob_cap",
+        defaultValue = false,
+        titleResId = R.string.pref_title_aimi_late_wave_iob_cap,
+        summaryResId = R.string.pref_summary_aimi_late_wave_iob_cap,
+    ),
     OApsAIMIMealRequiresDeclaration(
         key = "key_aimi_meal_requires_declaration",
         defaultValue = false,
