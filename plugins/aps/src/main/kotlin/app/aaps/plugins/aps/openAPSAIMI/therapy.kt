@@ -61,6 +61,14 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
      * The "this bolus is a correction" button: `MealKnownGate` closes the meal window on it.
      */
     var correctionNoteStartMs = 0L
+
+    /**
+     * Timestamp of the newest "gros" note of the last day, 0 when there is none.
+     *
+     * The big meal button: it opens the meal window like "eating" and also says the meal is large.
+     * Read whatever its duration, because `BigMealGate` needs it for the whole meal.
+     */
+    var bigMealNoteMs = 0L
     private var latestNoteEvents: List<TE> = emptyList()
 
     fun updateStatesBasedOnTherapyEvents(forceRefresh: Boolean = false) {
@@ -124,6 +132,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
                 fclTime = findActiveFclEvents(events, now),
                 mealKnownStartMs = findActiveMealKnownStart(events, now),
                 correctionNoteStartMs = findRecentCorrectionNoteStart(events, now),
+                bigMealNoteMs = findLatestBigMealNote(events, now),
                 bfastTime = findActivebfastEvents(events, now),
                 lunchTime = findActiveLunchEvents(events, now),
                 dinnerTime = findActiveDinnerEvents(events, now),
@@ -149,6 +158,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
             fclTime = false,
             mealKnownStartMs = 0L,
             correctionNoteStartMs = 0L,
+            bigMealNoteMs = 0L,
             bfastTime = false,
             lunchTime = false,
             dinnerTime = false,
@@ -191,6 +201,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
         fclTime = snapshot.fclTime
         mealKnownStartMs = snapshot.mealKnownStartMs
         correctionNoteStartMs = snapshot.correctionNoteStartMs
+        bigMealNoteMs = snapshot.bigMealNoteMs
         bfastTime = snapshot.bfastTime
         lunchTime = snapshot.lunchTime
         dinnerTime = snapshot.dinnerTime
@@ -213,6 +224,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
         fclTime = false
         mealKnownStartMs = 0L
         correctionNoteStartMs = 0L
+        bigMealNoteMs = 0L
         bfastTime = false
         lunchTime = false
         dinnerTime = false
@@ -221,7 +233,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
     }
 
     /**
-     * Newest active note holding "eating", or 0 when none is running.
+     * Newest active note holding "eating" or "gros" (the big meal button), or 0 when none is running.
      *
      * The timestamp is returned rather than a boolean so `MealKnownGate` can open its window once
      * per note instead of pushing the end further away on every tick.
@@ -229,10 +241,18 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
     private fun findActiveMealKnownStart(events: List<TE>, now: Long): Long =
         events.filter { it.type == TE.Type.NOTE }
             .filter { event ->
-                event.note?.contains("eating", ignoreCase = true) == true &&
+                (event.note?.contains("eating", ignoreCase = true) == true || isBigMealNote(event)) &&
                     now <= (event.timestamp + event.duration)
             }
             .maxOfOrNull { it.timestamp } ?: 0L
+
+    /** Newest "gros" note already written, whatever its duration, or 0 when there is none. */
+    private fun findLatestBigMealNote(events: List<TE>, now: Long): Long =
+        events.filter { it.type == TE.Type.NOTE && it.timestamp <= now && isBigMealNote(it) }
+            .maxOfOrNull { it.timestamp } ?: 0L
+
+    private fun isBigMealNote(event: TE): Boolean =
+        event.note?.contains("gros", ignoreCase = true) == true
 
     /**
      * Newest note holding "correction" from the last 30 minutes, or 0 when there is none.
@@ -450,6 +470,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
         val fclTime: Boolean,
         val mealKnownStartMs: Long,
         val correctionNoteStartMs: Long,
+        val bigMealNoteMs: Long,
         val bfastTime: Boolean,
         val lunchTime: Boolean,
         val dinnerTime: Boolean,
