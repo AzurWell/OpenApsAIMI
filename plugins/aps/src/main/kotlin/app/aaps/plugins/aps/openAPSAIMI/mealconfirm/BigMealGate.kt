@@ -3,24 +3,28 @@ package app.aaps.plugins.aps.openAPSAIMI.mealconfirm
 import kotlin.math.max
 
 /**
- * A big meal announced by the size of the user's own bolus: when its later rise takes off, let the
- * loop dose it above the usual max IOB instead of holding it back. Shadow only for now.
+ * A big meal announced at its start, by the big meal button or by the size of the user's own bolus:
+ * when its later rise takes off, let the loop dose it above the usual max IOB instead of holding it
+ * back. Shadow only for now.
  *
  * ## Why this exists
  *
  * The loop cannot know a meal is large before the glucose rises: a 2 U bolus may cover a salad or a
  * plate of pasta. On large starchy meals the rise comes fast, the loop reaches the max IOB within
  * half an hour of it and then sends almost nothing while glucose climbs past 300 and stays there.
- * The user knows the size of the meal when they bolus. A bolus of [BIG_BOLUS_U] or more is taken as
- * "this is a big meal, expect a big second wave".
+ * The user knows the size of the meal when it starts. Two ways to say "this is a big meal, expect a
+ * big second wave", both with the one action the user already does at the start of a meal:
+ * - the big meal button, an AAPS Automation that writes a note holding "gros". It opens the meal
+ *   window like "eating" and gives no insulin: for a big meal started low or with insulin on board;
+ * - a meal bolus of [BIG_BOLUS_U] or more.
  *
  * Replayed on a month of declared meals, no meal bolus ever reached [BIG_BOLUS_U]: this is a new
  * habit, not a pattern found in the log, so nothing here is tuned yet and the rule only reports.
  *
  * ## The rule
  *
- * The meal is declared ([MealKnownGate]) and the user's own boluses for it add up to [BIG_BOLUS_U]
- * or more, in one bolus or in two parts ([mealBolusU]). Between [MIN_DELAY_MIN] and [MAX_DELAY_MIN] after the declaration, on a tick where
+ * The meal is declared ([MealKnownGate]), and the big meal note was written for it or the user's own
+ * boluses for it add up to [BIG_BOLUS_U] or more, in one bolus or in two parts ([mealBolusU]). Between [MIN_DELAY_MIN] and [MAX_DELAY_MIN] after the declaration, on a tick where
  * glucose is at [MIN_BG_MGDL] or above and rose [FAST_RISE_MGDL] or more over the last
  * [RISE_WINDOW_MIN] minutes, the max IOB would be [RAISED_MAX_IOB_U] instead of the user's own.
  * The second-wave hold and the late-wave cap would stand aside on those ticks. As soon as the rise
@@ -30,7 +34,7 @@ import kotlin.math.max
  */
 object BigMealGate {
 
-    const val BIG_BOLUS_U = 5.0
+    const val BIG_BOLUS_U = 4.0
     const val BOLUS_BEFORE_ARM_MIN = 120L
     const val MIN_DELAY_MIN = 45L
     const val MAX_DELAY_MIN = 300L
@@ -47,6 +51,8 @@ object BigMealGate {
     data class Decision(
         /** A big meal is declared and still inside its window. */
         val bigMeal: Boolean,
+        /** The big meal note said so (the bolus may be smaller). */
+        val byNote: Boolean = false,
         /** This tick is a fast rise of that meal: the raised max IOB would apply. */
         val release: Boolean = false,
         val minutesSinceArm: Long = 0L,
@@ -77,6 +83,7 @@ object BigMealGate {
     /**
      * @param armedAtMs when the meal was declared ([MealKnownGate]), 0 when there is none.
      * @param bolusU the user's own boluses for this meal, see [mealBolusU].
+     * @param bigMealNoteMs when the newest big meal note was written, 0 when there is none.
      * @param readings glucose since a little before [now], any order.
      * @param maxIobU the user's max IOB.
      */
@@ -87,11 +94,22 @@ object BigMealGate {
         readings: List<Reading>,
         iobU: Double,
         maxIobU: Double,
+        bigMealNoteMs: Long = 0L,
     ): Decision {
-        if (armedAtMs <= 0L || now < armedAtMs || !bolusU.isFinite() || bolusU < BIG_BOLUS_U) return Decision.INACTIVE
+        if (armedAtMs <= 0L || now < armedAtMs) return Decision.INACTIVE
+        val byNote = bigMealNoteMs > 0L && bigMealNoteMs >= armedAtMs - BOLUS_BEFORE_ARM_MIN * MIN_MS && bigMealNoteMs <= now
+        val byBolus = bolusU.isFinite() && bolusU >= BIG_BOLUS_U
+        if (!byNote && !byBolus) return Decision.INACTIVE
         val sinceArm = (now - armedAtMs) / MIN_MS
         if (sinceArm > MAX_DELAY_MIN) return Decision.INACTIVE
-        val waiting = Decision(bigMeal = true, minutesSinceArm = sinceArm, bolusU = bolusU, iobU = iobU, maxIobU = maxIobU)
+        val waiting = Decision(
+            bigMeal = true,
+            byNote = byNote,
+            minutesSinceArm = sinceArm,
+            bolusU = if (bolusU.isFinite()) bolusU else 0.0,
+            iobU = iobU,
+            maxIobU = maxIobU,
+        )
         val valid = readings.filter { it.timestamp <= now && it.mgdl.isFinite() && it.mgdl > 39.0 }.sortedBy { it.timestamp }
         val last = valid.lastOrNull() ?: return waiting
         val before = valid.lastOrNull { it.timestamp <= last.timestamp - RISE_WINDOW_MIN * MIN_MS } ?: return waiting
