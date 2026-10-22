@@ -75,6 +75,7 @@ import app.aaps.core.data.model.HR
 import app.aaps.plugins.aps.openAPSAIMI.model.DecisionResult
 import app.aaps.plugins.aps.openAPSAIMI.ml.AimiCorpusPruner
 import app.aaps.plugins.aps.openAPSAIMI.safety.BioSyncDiaRule
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.BigMealGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.BolusEarlyCapGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.LateWaveGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationGate
@@ -20344,6 +20345,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 applySecondWaveHold(it, ctx)
                 applyBolusEarlyCap(it, ctx)
                 applyLateWaveCap(it, ctx)
+                reportBigMeal(it, ctx)
             }
         }
     }
@@ -20520,6 +20522,45 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             (if (rateCut) " basal ${"%.2f".format(rate)}→${"%.2f".format(allowedRate)}U/h" else "")
         consoleLog.add("🐢 $line")
         result.reason.append(" [$line]")
+    }
+
+    /**
+     * A big meal announced by a bolus of 5 U or more: on a fast rise of that meal, says what a max IOB
+     * of 10 U would have left room for. Report only, it never changes the dose. See [BigMealGate].
+     */
+    private fun reportBigMeal(result: RT, ctx: AimiTickContext) {
+        val now = dateUtil.now()
+        val elapsed = MealKnownGate.msSinceArm(preferences, now) ?: return
+        val armedAt = now - elapsed
+        val boluses = mealGateBoluses(now)
+            .filter { it.isValid && it.type == BS.Type.NORMAL }
+            .map { it.timestamp to it.amount }
+        val bolusU = BigMealGate.mealBolusU(armedAt, now, boluses)
+        if (bolusU < BigMealGate.BIG_BOLUS_U) return
+        val from = now - (BigMealGate.RISE_WINDOW_MIN + 10L) * 60_000L
+        val readings = (iobCobCalculator.ads.getBucketedDataTableCopy() ?: return)
+            .filter { !it.filledGap && it.timestamp >= from }
+            .map { BigMealGate.Reading(it.timestamp, it.recalculated) }
+        val decision = BigMealGate.evaluate(
+            now = now,
+            armedAtMs = armedAt,
+            bolusU = bolusU,
+            readings = readings,
+            iobU = ctx.iobDataArray.firstOrNull()?.iob ?: return,
+            maxIobU = maxIob,
+        )
+        if (!decision.bigMeal) return
+        val head = "🍛 big-meal bolus ${"%.1f".format(decision.bolusU)}U t+${decision.minutesSinceArm}min"
+        val line = if (decision.release) {
+            "$head BG ${"%.0f".format(decision.bgMgdl)} +${"%.0f".format(decision.riseMgdl)}/${BigMealGate.RISE_WINDOW_MIN}min " +
+                "IOB ${"%.2f".format(decision.iobU)} [BIG_MEAL(shadow) MaxIob ${"%.1f".format(decision.maxIobU)}→" +
+                "${"%.1f".format(maxOf(BigMealGate.RAISED_MAX_IOB_U, decision.maxIobU))} +${"%.2f".format(decision.extraRoomU)}U" +
+                (if (lastSecondWaveVerdict.hold) ", no second-wave hold" else "") + "]"
+        } else {
+            "$head watching"
+        }
+        consoleLog.add(line)
+        result.reason.append(" $line")
     }
 
     /** See [MealConfirmationGate.isMealInterpretationBlocked]. */
