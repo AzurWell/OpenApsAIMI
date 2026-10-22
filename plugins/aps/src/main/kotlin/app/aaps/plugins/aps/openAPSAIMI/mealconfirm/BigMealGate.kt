@@ -20,7 +20,7 @@ import kotlin.math.max
  * ## The rule
  *
  * The meal is declared ([MealKnownGate]) and the user's own boluses for it add up to [BIG_BOLUS_U]
- * or more. Between [MIN_DELAY_MIN] and [MAX_DELAY_MIN] after the declaration, on a tick where
+ * or more, in one bolus or in two parts ([mealBolusU]). Between [MIN_DELAY_MIN] and [MAX_DELAY_MIN] after the declaration, on a tick where
  * glucose is at [MIN_BG_MGDL] or above and rose [FAST_RISE_MGDL] or more over the last
  * [RISE_WINDOW_MIN] minutes, the max IOB would be [RAISED_MAX_IOB_U] instead of the user's own.
  * The second-wave hold and the late-wave cap would stand aside on those ticks. As soon as the rise
@@ -31,7 +31,7 @@ import kotlin.math.max
 object BigMealGate {
 
     const val BIG_BOLUS_U = 5.0
-    const val BOLUS_BEFORE_ARM_MIN = 20L
+    const val BOLUS_BEFORE_ARM_MIN = 120L
     const val MIN_DELAY_MIN = 45L
     const val MAX_DELAY_MIN = 300L
     const val MIN_BG_MGDL = 180.0
@@ -65,7 +65,9 @@ object BigMealGate {
 
     /**
      * Total of the user's own boluses for the meal declared at [armedAtMs]: those given at most
-     * [BOLUS_BEFORE_ARM_MIN] before it (the eating note pressed after the bolus) and after it.
+     * [BOLUS_BEFORE_ARM_MIN] before it and after it. A meal is often bolused in two parts, half at
+     * the start and half when glucose starts to rise, and each bolus restarts the declaration: the
+     * first part must still count.
      */
     fun mealBolusU(armedAtMs: Long, now: Long, boluses: List<Pair<Long, Double>>): Double =
         boluses
