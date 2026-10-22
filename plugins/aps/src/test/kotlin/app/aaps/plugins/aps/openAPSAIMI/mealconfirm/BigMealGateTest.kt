@@ -87,11 +87,12 @@ class BigMealGateTest {
 
     @Test
     fun theMealBolusAddsTheBolusesAroundTheDeclaration() {
+        // The second part of the bolus restarted the declaration at t0.
         val boluses = listOf(
-            t0 - 30 * min to 2.0, // too early: an earlier meal or a correction
-            t0 - 10 * min to 3.0, // the bolus, then the eating note
-            t0 + 20 * min to 2.0, // a second bolus for the same meal
+            t0 - 180 * min to 2.0, // too early: an earlier meal
+            t0 - 70 * min to 3.0, // first part, at the start of the meal
+            t0 to 3.0, // second part, when glucose started to rise
         )
-        assertThat(BigMealGate.mealBolusU(t0, t0 + 60 * min, boluses)).isWithin(1e-9).of(5.0)
+        assertThat(BigMealGate.mealBolusU(t0, t0 + 60 * min, boluses)).isWithin(1e-9).of(6.0)
     }
 }
