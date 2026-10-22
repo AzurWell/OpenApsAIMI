@@ -4,8 +4,8 @@ import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.Test
 
 /**
- * Locks when a big meal bolus would raise the max IOB: only a bolus of 5 U or more, only on a fast
- * rise above 180 after the first 45 minutes.
+ * Locks when a big meal would raise the max IOB: only after the big meal note or a bolus of 4 U or
+ * more, only on a fast rise above 180 after the first 45 minutes.
  */
 class BigMealGateTest {
 
@@ -23,6 +23,7 @@ class BigMealGateTest {
         iob: Double = 6.9,
         maxIob: Double = 7.0,
         armedAt: Long = t0,
+        note: Long = 0L,
     ) = BigMealGate.evaluate(
         now = t0 + nowMin * min,
         armedAtMs = armedAt,
@@ -30,6 +31,7 @@ class BigMealGateTest {
         readings = readings,
         iobU = iob,
         maxIobU = maxIob,
+        bigMealNoteMs = note,
     )
 
     @Test
@@ -49,8 +51,22 @@ class BigMealGateTest {
     }
 
     @Test
-    fun aBolusUnderFiveUnitsChangesNothing() {
-        assertThat(evaluate(nowMin = 95, bolus = 4.9)).isEqualTo(BigMealGate.Decision.INACTIVE)
+    fun aBolusUnderFourUnitsChangesNothing() {
+        assertThat(evaluate(nowMin = 95, bolus = 3.9)).isEqualTo(BigMealGate.Decision.INACTIVE)
+        assertThat(evaluate(nowMin = 95, bolus = 4.0).release).isTrue()
+    }
+
+    @Test
+    fun theBigMealNoteIsEnoughWithoutABolus() {
+        val d = evaluate(nowMin = 95, bolus = 0.0, note = t0)
+        assertThat(d.byNote).isTrue()
+        assertThat(d.release).isTrue()
+    }
+
+    @Test
+    fun aBigMealNoteOfAnEarlierMealDoesNotCount() {
+        val old = t0 - (BigMealGate.BOLUS_BEFORE_ARM_MIN + 1) * min
+        assertThat(evaluate(nowMin = 95, bolus = 2.0, note = old)).isEqualTo(BigMealGate.Decision.INACTIVE)
     }
 
     @Test

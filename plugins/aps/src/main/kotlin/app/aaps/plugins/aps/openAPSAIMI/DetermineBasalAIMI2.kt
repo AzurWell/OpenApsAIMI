@@ -3390,6 +3390,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         // 🍽️ Light meal button: an "eating" note opens the window and doses nothing.
         // Placed here and not in [runDetermineBasalTickInner]: `therapy` only exists in this
         // function, and `bg`/`delta` are only refreshed by the stage just above.
+        bigMealNoteMs = therapy.bigMealNoteMs
         if (MealKnownGate.armFromNote(preferences, dateUtil.now(), therapy.mealKnownStartMs)) {
             consoleLog.add("🍽️ MEAL_KNOWN: armed by the eating note")
             if (MealConfirmationGate.clearDenialForDeclaredMeal(preferences, dateUtil.now())) {
@@ -12508,6 +12509,9 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     private var decceleratingDown: Int = 0
     private var stable: Int = 0
     private var maxIob = 0.0
+
+    /** Newest "gros" note (big meal button), read with the other notes. See [BigMealGate]. */
+    private var bigMealNoteMs = 0L
     private var maxSMB = 0.5
     private var maxSMBHB = 0.5
     private var lastBolusSMBUnit = 0.0f
@@ -20525,8 +20529,9 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     }
 
     /**
-     * A big meal announced by a bolus of 5 U or more: on a fast rise of that meal, says what a max IOB
-     * of 10 U would have left room for. Report only, it never changes the dose. See [BigMealGate].
+     * A big meal announced by the "gros" note or a bolus of 4 U or more: on a fast rise of that meal,
+     * says what a max IOB of 10 U would have left room for. Report only, it never changes the dose.
+     * See [BigMealGate].
      */
     private fun reportBigMeal(result: RT, ctx: AimiTickContext) {
         val now = dateUtil.now()
@@ -20536,7 +20541,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             .filter { it.isValid && it.type == BS.Type.NORMAL }
             .map { it.timestamp to it.amount }
         val bolusU = BigMealGate.mealBolusU(armedAt, now, boluses)
-        if (bolusU < BigMealGate.BIG_BOLUS_U) return
+        if (bolusU < BigMealGate.BIG_BOLUS_U && bigMealNoteMs < armedAt - BigMealGate.BOLUS_BEFORE_ARM_MIN * 60_000L) return
         val from = now - (BigMealGate.RISE_WINDOW_MIN + 10L) * 60_000L
         val readings = (iobCobCalculator.ads.getBucketedDataTableCopy() ?: return)
             .filter { !it.filledGap && it.timestamp >= from }
@@ -20548,9 +20553,10 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             readings = readings,
             iobU = ctx.iobDataArray.firstOrNull()?.iob ?: return,
             maxIobU = maxIob,
+            bigMealNoteMs = bigMealNoteMs,
         )
         if (!decision.bigMeal) return
-        val head = "🍛 big-meal bolus ${"%.1f".format(decision.bolusU)}U t+${decision.minutesSinceArm}min"
+        val head = "🍛 big-meal ${if (decision.byNote) "note " else ""}bolus ${"%.1f".format(decision.bolusU)}U t+${decision.minutesSinceArm}min"
         val line = if (decision.release) {
             "$head BG ${"%.0f".format(decision.bgMgdl)} +${"%.0f".format(decision.riseMgdl)}/${BigMealGate.RISE_WINDOW_MIN}min " +
                 "IOB ${"%.2f".format(decision.iobU)} [BIG_MEAL(shadow) MaxIob ${"%.1f".format(decision.maxIobU)}→" +
