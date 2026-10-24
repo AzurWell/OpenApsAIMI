@@ -81,6 +81,8 @@ object SecondWaveGate {
         val hold: Boolean,
         /** Short reason for `rT.reason` and the logs. */
         val reason: String,
+        /** True when the rise climbed [PROOF_MGDL] above its trough and is under [HOLD_CEILING_MGDL], see [SecondWaveRateGate]. */
+        val proven: Boolean = false,
     ) {
 
         companion object {
@@ -133,7 +135,7 @@ object SecondWaveGate {
             holds(bgMgdl, shape.startMgdl, shape.peakMgdl, shape.troughMgdl) ->
                 Verdict(hold = true, reason = "2nd rise held $where")
             bgMgdl >= HOLD_CEILING_MGDL -> Verdict(hold = false, reason = "2nd rise above ${HOLD_CEILING_MGDL.toInt()}, left alone $where")
-            else -> Verdict(hold = false, reason = "2nd rise proven $where")
+            else -> Verdict(hold = false, reason = "2nd rise proven $where", proven = true)
         }
     }
 }

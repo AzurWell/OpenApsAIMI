@@ -403,6 +403,12 @@ enum class BooleanKey(
         titleResId = R.string.pref_title_aimi_second_wave_guard,
         summaryResId = R.string.pref_summary_aimi_second_wave_guard,
     ),
+    OApsAIMISecondWaveRateCap(
+        key = "key_aimi_second_wave_rate_cap",
+        defaultValue = false,
+        titleResId = R.string.pref_title_aimi_second_wave_rate_cap,
+        summaryResId = R.string.pref_summary_aimi_second_wave_rate_cap,
+    ),
     OApsAIMIBolusEarlyCap(
         key = "key_aimi_bolus_early_cap",
         defaultValue = false,
