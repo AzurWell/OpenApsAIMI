@@ -169,6 +169,43 @@ object MealConfirmationGate {
      */
     const val DENIED_ELEVATED_LINE_MGDL = 140.0
 
+    /**
+     * True when a night high with no meal is stuck where it is: the ceiling of
+     * [deniedBasalCeilingUph] is then lifted to the normal limit.
+     *
+     * With the ceiling on, a flat 160-180 night with little insulin on board can stay there for
+     * hours: the loop asks for 3 to 4.5 U/h and gets the profile rate times the factor. In a field
+     * log the ceiling took 3 to 8 U per night away above 140, and the night mean went up by about
+     * 25 mg/dL. Replayed on those nights, lifting it only here gave about 3.4 U more per night.
+     *
+     * All of these must be true:
+     *  - glucose at [STUCK_HIGH_MIN_MGDL] or more,
+     *  - not falling: short and long average deltas both at [STUCK_HIGH_MIN_DELTA] or more,
+     *  - insulin on board under [STUCK_HIGH_MAX_IOB_U],
+     *  - local hour from [STUCK_HIGH_FROM_HOUR] to [STUCK_HIGH_UNTIL_HOUR] (excluded).
+     */
+    fun isStuckNightHigh(
+        bgMgdl: Double,
+        shortAvgDelta: Double,
+        longAvgDelta: Double,
+        iobU: Double,
+        now: Long,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): Boolean {
+        if (!bgMgdl.isFinite() || bgMgdl < STUCK_HIGH_MIN_MGDL) return false
+        if (!(shortAvgDelta >= STUCK_HIGH_MIN_DELTA && longAvgDelta >= STUCK_HIGH_MIN_DELTA)) return false
+        if (!iobU.isFinite() || iobU >= STUCK_HIGH_MAX_IOB_U) return false
+        val hour = Instant.ofEpochMilli(now).atZone(zone).hour
+        return hour >= STUCK_HIGH_FROM_HOUR || hour < STUCK_HIGH_UNTIL_HOUR
+    }
+
+    const val STUCK_HIGH_MIN_MGDL = 150.0
+    /** mg/dL per 5 minutes: about -5 over 30 minutes. */
+    const val STUCK_HIGH_MIN_DELTA = -1.0
+    const val STUCK_HIGH_MAX_IOB_U = 2.5
+    const val STUCK_HIGH_FROM_HOUR = 22
+    const val STUCK_HIGH_UNTIL_HOUR = 9
+
     /** Used when [IntKey.OApsAIMINoMealElevatedBasalPct] holds a value outside its own range. */
     const val DEFAULT_ELEVATED_BASAL_FACTOR = 1.5
 
