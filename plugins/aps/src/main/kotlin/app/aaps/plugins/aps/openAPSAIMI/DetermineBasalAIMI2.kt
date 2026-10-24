@@ -20202,6 +20202,24 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             MealConfirmationGate.elevatedBasalFactor(preferences),
         )
         if (rate <= ceiling) return
+        val stuckHigh = preferences.get(BooleanKey.OApsAIMIStuckNightHighRelease) &&
+            MealConfirmationGate.isStuckNightHigh(
+                bgNow,
+                ctx.glucoseStatus.shortAvgDelta,
+                ctx.glucoseStatus.longAvgDelta,
+                ctx.iobDataArray.firstOrNull()?.iob ?: 0.0,
+                ctx.currentTime,
+            )
+        if (stuckHigh) {
+            if (rate <= normalMax) {
+                result.reason.append(" [STUCK_NIGHT_HIGH no cap ${"%.2f".format(rate)}U/h (BG ${"%.0f".format(bgNow)})]")
+                return
+            }
+            result.rate = normalMax
+            if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
+            result.reason.append(" [STUCK_NIGHT_HIGH ${"%.2f".format(rate)}→${"%.2f".format(normalMax)}U/h (BG ${"%.0f".format(bgNow)})]")
+            return
+        }
         result.rate = ceiling
         if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
         val line = "MEAL_DENIED_BASAL_CAP ${"%.2f".format(rate)}→${"%.2f".format(ceiling)}U/h (BG ${"%.0f".format(bgNow)})"

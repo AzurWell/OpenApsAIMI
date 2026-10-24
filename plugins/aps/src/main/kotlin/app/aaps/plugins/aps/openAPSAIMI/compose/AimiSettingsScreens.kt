@@ -1107,6 +1107,7 @@ internal object AimiSettingsScreens {
                 BooleanKey.OApsAIMIMealRequiresDeclaration,
                 IntKey.OApsAIMIDeclaredMealHorizonMin,
                 IntKey.OApsAIMINoMealElevatedBasalPct,
+                BooleanKey.OApsAIMIStuckNightHighRelease,
                 DoubleKey.OApsAIMIautodrivesmallPrebolus,
                 DoubleKey.OApsAIMIautodrivePrebolus,
             ),

@@ -415,6 +415,12 @@ enum class BooleanKey(
         titleResId = R.string.pref_title_aimi_late_wave_iob_cap,
         summaryResId = R.string.pref_summary_aimi_late_wave_iob_cap,
     ),
+    OApsAIMIStuckNightHighRelease(
+        key = "key_aimi_stuck_night_high_release",
+        defaultValue = true,
+        titleResId = R.string.pref_title_aimi_stuck_night_high_release,
+        summaryResId = R.string.pref_summary_aimi_stuck_night_high_release,
+    ),
     OApsAIMIMealRequiresDeclaration(
         key = "key_aimi_meal_requires_declaration",
         defaultValue = false,

@@ -301,6 +301,7 @@ internal object AimiSettingsManifest {
         AimiSettingEntry(BooleanKey.OApsAIMISecondWaveGuard, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
         AimiSettingEntry(BooleanKey.OApsAIMIBolusEarlyCap, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
         AimiSettingEntry(BooleanKey.OApsAIMILateWaveIobCap, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
+        AimiSettingEntry(BooleanKey.OApsAIMIStuckNightHighRelease, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.USER),
         AimiSettingEntry(BooleanKey.OApsAIMIMealRequiresDeclaration, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.USER),
         AimiSettingEntry(IntKey.OApsAIMIDeclaredMealHorizonMin, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.USER),
         AimiSettingEntry(IntKey.OApsAIMINoMealElevatedBasalPct, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
