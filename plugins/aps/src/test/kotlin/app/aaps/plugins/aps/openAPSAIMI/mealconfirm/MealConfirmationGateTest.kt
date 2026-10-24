@@ -211,4 +211,22 @@ class MealConfirmationGateTest {
         assertThat(MealConfirmationGate.isMealInterpretationBlocked(p, now, requireDeclaration = false)).isTrue()
         assertThat(MealConfirmationGate.isMealInterpretationBlocked(p, now, requireDeclaration = true)).isTrue()
     }
+
+    /** A flat 165 at 4:00 with little insulin on board: the ceiling is lifted. */
+    @Test
+    fun aFlatNightHighWithLittleInsulinIsStuck() {
+        assertThat(MealConfirmationGate.isStuckNightHigh(165.0, 0.2, -0.5, 2.1, at(4, 0), paris)).isTrue()
+        assertThat(MealConfirmationGate.isStuckNightHigh(150.0, -1.0, -1.0, 0.0, at(23, 30), paris)).isTrue()
+    }
+
+    /** Going down, already enough insulin, under 150 or in the day: the ceiling stays. */
+    @Test
+    fun theCeilingStaysWhenTheHighIsNotStuck() {
+        assertThat(MealConfirmationGate.isStuckNightHigh(165.0, -2.0, -0.5, 1.0, at(4, 0), paris)).isFalse()
+        assertThat(MealConfirmationGate.isStuckNightHigh(165.0, 0.0, -1.5, 1.0, at(4, 0), paris)).isFalse()
+        assertThat(MealConfirmationGate.isStuckNightHigh(165.0, 0.0, 0.0, 2.5, at(4, 0), paris)).isFalse()
+        assertThat(MealConfirmationGate.isStuckNightHigh(149.0, 0.0, 0.0, 1.0, at(4, 0), paris)).isFalse()
+        assertThat(MealConfirmationGate.isStuckNightHigh(165.0, 0.0, 0.0, 1.0, at(9, 0), paris)).isFalse()
+        assertThat(MealConfirmationGate.isStuckNightHigh(165.0, 0.0, 0.0, 1.0, at(15, 0), paris)).isFalse()
+    }
 }
