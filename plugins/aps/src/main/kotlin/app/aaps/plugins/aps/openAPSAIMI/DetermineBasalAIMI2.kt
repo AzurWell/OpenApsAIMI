@@ -82,6 +82,7 @@ import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationPrompt
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealKnownGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.SecondWaveGate
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.SecondWaveRateGate
 import app.aaps.plugins.aps.openAPSAIMI.smb.PredictionGapDamper
 import app.aaps.plugins.aps.openAPSAIMI.ml.AimiSmbTrainer
 import app.aaps.plugins.aps.openAPSAIMI.ml.SmbRefinementFeatureSchema
@@ -20347,6 +20348,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             AimiDetermineBasalTickOrchestrator.run(this, ctx).also {
                 applyMealDeniedBasalCap(it, ctx)
                 applySecondWaveHold(it, ctx)
+                applySecondWaveRateCap(it, ctx)
                 applyBolusEarlyCap(it, ctx)
                 applyLateWaveCap(it, ctx)
                 reportBigMeal(it, ctx)
@@ -20441,6 +20443,54 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             (if (smb > 0.0) " SMB ${"%.2f".format(smb)}→0" else "") +
             (if (basalOver) " basal ${"%.2f".format(rate)}→${"%.2f".format(scheduled)}U/h" else "")
         consoleLog.add("🌊 $line (${lastSecondWaveVerdict.reason})")
+        result.reason.append(" [$line]")
+    }
+
+    /**
+     * A second rise that has proven itself, under 200 mg/dL: at most 1 U of SMB per 30 minutes, and no
+     * basal above the scheduled rate. See [SecondWaveRateGate].
+     *
+     * On the tick result, after every path has written its dose, for the same reason as
+     * [applySecondWaveHold]. When the key is off, the tick says what it would have cut, so the rule
+     * can be read on real meals before it doses anything.
+     */
+    private fun applySecondWaveRateCap(result: RT, ctx: AimiTickContext) {
+        if (!lastSecondWaveVerdict.proven) return
+        val now = dateUtil.now()
+        val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
+        val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp }
+        val smb = result.units ?: 0.0
+        val smbLastWindow = mealGateBoluses(now)
+            .filter { it.isValid && it.type == BS.Type.SMB && it.timestamp > now - SecondWaveRateGate.WINDOW_MIN * 60_000L }
+            .sumOf { it.amount }
+        val decision = SecondWaveRateGate.evaluate(
+            proven = true,
+            bgMgdl = ctx.glucoseStatus.glucose,
+            smbLastWindowU = smbLastWindow,
+            proposedSmbU = smb,
+            proposedRateUph = rate,
+            scheduledUph = ctx.profile.current_basal,
+        )
+        if (!decision.active) return
+        val status = "🪜 2nd-rise rate SMB ${"%.2f".format(decision.smbSpentU)}/${"%.1f".format(SecondWaveRateGate.SMB_BUDGET_U)}U per ${SecondWaveRateGate.WINDOW_MIN}min"
+        consoleLog.add(status)
+        result.reason.append(" $status")
+        if (!decision.cuts(smb, rate)) return
+        val applied = preferences.get(BooleanKey.OApsAIMISecondWaveRateCap)
+        val smbCut = decision.smbAllowedU < smb
+        val allowedRate = decision.rateAllowedUph
+        val rateCut = rate != null && allowedRate != null && allowedRate < rate
+        if (applied) {
+            if (smbCut) result.units = decision.smbAllowedU
+            if (rateCut) {
+                result.rate = allowedRate
+                if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
+            }
+        }
+        val line = (if (applied) "SECOND_WAVE_RATE_CAP" else "SECOND_WAVE_RATE_CAP(shadow)") +
+            (if (smbCut) " SMB ${"%.2f".format(smb)}→${"%.2f".format(decision.smbAllowedU)}" else "") +
+            (if (rateCut) " basal ${"%.2f".format(rate)}→${"%.2f".format(allowedRate)}U/h" else "")
+        consoleLog.add("🪜 $line")
         result.reason.append(" [$line]")
     }
 
