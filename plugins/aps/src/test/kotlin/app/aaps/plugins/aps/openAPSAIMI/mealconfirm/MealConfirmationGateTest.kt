@@ -154,6 +154,7 @@ class MealConfirmationGateTest {
         fun prefs(pct: Int) = mockk<Preferences> { every { get(IntKey.OApsAIMINoMealElevatedBasalPct) } returns pct }
         assertThat(MealConfirmationGate.elevatedBasalFactor(prefs(100))).isEqualTo(1.0)
         assertThat(MealConfirmationGate.elevatedBasalFactor(prefs(180))).isEqualTo(1.8)
+        assertThat(MealConfirmationGate.elevatedBasalFactor(prefs(300))).isEqualTo(3.0)
         assertThat(MealConfirmationGate.elevatedBasalFactor(prefs(0))).isEqualTo(MealConfirmationGate.DEFAULT_ELEVATED_BASAL_FACTOR)
     }
 
