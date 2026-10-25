@@ -69,6 +69,43 @@ class MealKnownGateTest {
     }
 
     // -----------------------------------------------------------------------------------------
+    // Big meal: its own duration, set by the user
+    // -----------------------------------------------------------------------------------------
+
+    /** A big meal stays declared for the big meal duration and is active until 1 h before its end. */
+    @Test
+    fun aBigMealLastsLonger() {
+        val p = prefs(240)
+        every { p.get(IntKey.OApsAIMIBigMealHorizonMin) } returns 360
+        MealKnownGate.arm(p, t0)
+        assertThat(MealKnownGate.markBigMeal(p)).isTrue()
+        assertThat(MealKnownGate.isBigMeal(p)).isTrue()
+        assertThat(MealKnownGate.isWithinDeclaredMeal(p, t0 + 359 * min)).isTrue()
+        assertThat(MealKnownGate.isWithinDeclaredMeal(p, t0 + 361 * min)).isFalse()
+        assertThat(MealKnownGate.isMealKnown(p, t0 + 299 * min)).isTrue()
+        assertThat(MealKnownGate.isMealKnown(p, t0 + 301 * min)).isFalse()
+        assertThat(MealKnownGate.isMealStillAbsorbing(p, t0 + 359 * min)).isTrue()
+    }
+
+    /** Marking twice changes nothing, and a new meal starts as a normal one. */
+    @Test
+    fun aNewMealIsNotBigAnyMore() {
+        val p = prefs(240)
+        MealKnownGate.arm(p, t0)
+        MealKnownGate.markBigMeal(p)
+        assertThat(MealKnownGate.markBigMeal(p)).isFalse()
+        MealKnownGate.arm(p, t0 + 400 * min)
+        assertThat(MealKnownGate.isBigMeal(p)).isFalse()
+        assertThat(MealKnownGate.declaredMealHorizonMin(p)).isEqualTo(240L)
+    }
+
+    /** No meal running: nothing to mark. */
+    @Test
+    fun noMealNothingToMark() {
+        assertThat(MealKnownGate.markBigMeal(prefs(240))).isFalse()
+    }
+
+    // -----------------------------------------------------------------------------------------
     // "This bolus is a correction"
     // -----------------------------------------------------------------------------------------
 

@@ -47,5 +47,7 @@ enum class AimiLongKey(
     /** Last time the silent prompt was escalated to an audible alarm. */
     MealPromptEscalatedAt("oa_aimi_meal_prompt_escalated_at_ms", 0L),
     /** Time of the manual bolus that opened the current meal window. 0 = opened by a note, or none. */
-    MealKnownBolusAt("oa_aimi_meal_known_bolus_at_ms", 0L)
+    MealKnownBolusAt("oa_aimi_meal_known_bolus_at_ms", 0L),
+    /** Start of the meal that was found to be big (`MealKnownGate.markBigMeal`). Big only while it equals `MealKnownArmedAt`. */
+    MealKnownBigMealAt("oa_aimi_meal_known_big_meal_at_ms", 0L)
 }
