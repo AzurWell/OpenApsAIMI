@@ -298,13 +298,9 @@ internal object AimiSettingsManifest {
         AimiSettingEntry(BooleanKey.OApsAIMIStressIsfFloor, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
         AimiSettingEntry(BooleanKey.OApsAIMIAnticipBasalFloor, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.USER),
         AimiSettingEntry(BooleanKey.OApsAIMIAnticipMealEvidence, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.USER),
-        AimiSettingEntry(BooleanKey.OApsAIMISecondWaveGuard, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
-        AimiSettingEntry(BooleanKey.OApsAIMISecondWaveRateCap, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
-        AimiSettingEntry(BooleanKey.OApsAIMIBolusEarlyCap, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
-        AimiSettingEntry(BooleanKey.OApsAIMILateWaveIobCap, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
-        AimiSettingEntry(BooleanKey.OApsAIMIStuckNightHighRelease, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.USER),
-        AimiSettingEntry(BooleanKey.OApsAIMIMealRequiresDeclaration, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.USER),
         AimiSettingEntry(IntKey.OApsAIMIDeclaredMealHorizonMin, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.USER),
+        AimiSettingEntry(IntKey.OApsAIMIBigMealHorizonMin, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.USER),
+        AimiSettingEntry(DoubleKey.OApsAIMIBigMealMaxIob, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.USER),
         AimiSettingEntry(IntKey.OApsAIMINoMealElevatedBasalPct, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
         AimiSettingEntry(BooleanKey.OApsAIMIRiseCeilingGuard, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
         AimiSettingEntry(BooleanKey.OApsAIMIEffortActivityProtection, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Physio, AimiSettingsWriter.USER),
@@ -526,6 +522,7 @@ internal object AimiSettingsManifest {
         AimiSettingEntry(AimiLongKey.MealKnownBgTroughMgdl, AimiSettingsLevel.EXPERT, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.LOOP),
         AimiSettingEntry(AimiLongKey.MealPromptEscalatedAt, AimiSettingsLevel.EXPERT, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.LOOP),
         AimiSettingEntry(AimiLongKey.MealKnownBolusAt, AimiSettingsLevel.EXPERT, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.LOOP),
+        AimiSettingEntry(AimiLongKey.MealKnownBigMealAt, AimiSettingsLevel.EXPERT, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.LOOP),
         AimiSettingEntry(AimiLongKey.PendingLegacyPrebolusExpiry, AimiSettingsLevel.EXPERT, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.LOOP),
 
         // --- Widened scope batch (2026-10-03): keys outside the OApsAIMI prefix. ---

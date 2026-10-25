@@ -387,53 +387,6 @@ enum class BooleanKey(
         summaryResId = R.string.pref_summary_aimi_rise_ceiling_guard,
     ),
     /**
-     * Opt-in: limit boluses on the **second rise** of a meal that is already running.
-     *
-     * Works only when a meal is known (`MealKnownGate`), which happens when the user gives a manual
-     * meal bolus or says "I am eating". Two hours after that, if more than 4 U is still active and
-     * glucose rises again with no declared carbs, each SMB is capped and the whole second rise gets
-     * a small total budget. Bolus channel only: the temporary basal is not changed.
-     *
-     * The verdict is worked out and exported on every tick even when this key is false, so the
-     * effect can be measured before the feature is turned on.
-     */
-    OApsAIMISecondWaveGuard(
-        key = "key_aimi_second_wave_guard",
-        defaultValue = false,
-        titleResId = R.string.pref_title_aimi_second_wave_guard,
-        summaryResId = R.string.pref_summary_aimi_second_wave_guard,
-    ),
-    OApsAIMISecondWaveRateCap(
-        key = "key_aimi_second_wave_rate_cap",
-        defaultValue = false,
-        titleResId = R.string.pref_title_aimi_second_wave_rate_cap,
-        summaryResId = R.string.pref_summary_aimi_second_wave_rate_cap,
-    ),
-    OApsAIMIBolusEarlyCap(
-        key = "key_aimi_bolus_early_cap",
-        defaultValue = false,
-        titleResId = R.string.pref_title_aimi_bolus_early_cap,
-        summaryResId = R.string.pref_summary_aimi_bolus_early_cap,
-    ),
-    OApsAIMILateWaveIobCap(
-        key = "key_aimi_late_wave_iob_cap",
-        defaultValue = false,
-        titleResId = R.string.pref_title_aimi_late_wave_iob_cap,
-        summaryResId = R.string.pref_summary_aimi_late_wave_iob_cap,
-    ),
-    OApsAIMIStuckNightHighRelease(
-        key = "key_aimi_stuck_night_high_release",
-        defaultValue = true,
-        titleResId = R.string.pref_title_aimi_stuck_night_high_release,
-        summaryResId = R.string.pref_summary_aimi_stuck_night_high_release,
-    ),
-    OApsAIMIMealRequiresDeclaration(
-        key = "key_aimi_meal_requires_declaration",
-        defaultValue = false,
-        titleResId = R.string.pref_title_aimi_meal_requires_declaration,
-        summaryResId = R.string.pref_summary_aimi_meal_requires_declaration,
-    ),
-    /**
      * Opt-in: sensor-driven effort protection. Caps SMB when steps/HR indicate current or recent
      * physical effort, independent of any declared AIMI Context activity intent. Reduction-only
      * (fail-safe); never reduces under a stress posture. See docs/AIMI_ARCHITECTURE_MAP.md §11.

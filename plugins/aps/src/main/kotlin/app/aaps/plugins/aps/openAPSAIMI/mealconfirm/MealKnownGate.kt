@@ -4,6 +4,7 @@ import app.aaps.core.data.model.BS
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.plugins.aps.openAPSAIMI.keys.AimiLongKey
+import kotlin.math.max
 
 /**
  * "A meal is running" — kept apart from the meal modes.
@@ -65,7 +66,7 @@ object MealKnownGate {
      */
     fun isMealStillAbsorbing(preferences: Preferences, now: Long): Boolean {
         val elapsed = msSinceArm(preferences, now) ?: return false
-        return elapsed < MEAL_TAIL_MIN * MIN_MS
+        return elapsed < max(MEAL_TAIL_MIN, declaredMealHorizonMin(preferences)) * MIN_MS
     }
 
     /**
@@ -81,15 +82,56 @@ object MealKnownGate {
 
     /**
      * The horizon actually in force: [IntKey.OApsAIMIDeclaredMealHorizonMin], so the user can tune
-     * it without a rebuild. No single value fits every meal: in a field log a quick lunch was over
-     * at t+3 h and the loop dosed a small rise at t+3h30 into a low, while a pasta dinner was still
-     * arriving at t+3h40. A value outside the key's own range falls back to
-     * [DECLARED_MEAL_HORIZON_MIN].
+     * it without a rebuild, or [bigMealHorizonMin] for a big meal ([isBigMeal]). No single value
+     * fits every meal: in a field log a quick lunch was over at t+3 h and the loop dosed a small
+     * rise at t+3h30 into a low, while a pasta dinner was still arriving at t+3h40. A value outside
+     * the key's own range falls back to [DECLARED_MEAL_HORIZON_MIN].
      */
     fun declaredMealHorizonMin(preferences: Preferences): Long {
+        if (isBigMeal(preferences)) return bigMealHorizonMin(preferences)
         val key = IntKey.OApsAIMIDeclaredMealHorizonMin
         val value = preferences.get(key)
         return if (value in key.min..key.max) value.toLong() else DECLARED_MEAL_HORIZON_MIN
+    }
+
+    /** Default of [IntKey.OApsAIMIBigMealHorizonMin]: fat and bread can still arrive at t+5 h. */
+    const val BIG_MEAL_HORIZON_MIN = 360L
+
+    /**
+     * The active phase of a big meal ends this long before its horizon, as the normal 3 h active
+     * phase ends 1 h before the normal 4 h horizon.
+     */
+    const val BIG_MEAL_ACTIVE_BEFORE_END_MIN = 60L
+
+    /** How long a big meal stays declared: [IntKey.OApsAIMIBigMealHorizonMin]. */
+    fun bigMealHorizonMin(preferences: Preferences): Long {
+        val key = IntKey.OApsAIMIBigMealHorizonMin
+        val value = preferences.get(key)
+        return if (value in key.min..key.max) value.toLong() else BIG_MEAL_HORIZON_MIN
+    }
+
+    /** True when the meal running now was marked big by [markBigMeal]. */
+    fun isBigMeal(preferences: Preferences): Boolean {
+        val armedAt = preferences.get(AimiLongKey.MealKnownArmedAt)
+        return armedAt > 0L && preferences.get(AimiLongKey.MealKnownBigMealAt) == armedAt
+    }
+
+    /**
+     * Marks the meal running now as big (big meal note, or 4 U or more of the user's own bolus,
+     * see `BigMealGate`): it stays declared for [bigMealHorizonMin], and its active phase
+     * ([isMealKnown]) runs until [BIG_MEAL_ACTIVE_BEFORE_END_MIN] before that. A new meal ([arm])
+     * starts as a normal meal again.
+     *
+     * @return true when this call marked the meal, false when there is no meal or it was big already.
+     */
+    fun markBigMeal(preferences: Preferences): Boolean {
+        val armedAt = preferences.get(AimiLongKey.MealKnownArmedAt)
+        if (armedAt <= 0L || isBigMeal(preferences)) return false
+        preferences.put(AimiLongKey.MealKnownBigMealAt, armedAt)
+        val activeMin = max(MEAL_WINDOW_MIN, bigMealHorizonMin(preferences) - BIG_MEAL_ACTIVE_BEFORE_END_MIN)
+        val until = armedAt + activeMin * MIN_MS
+        if (until > preferences.get(AimiLongKey.MealKnownUntil)) preferences.put(AimiLongKey.MealKnownUntil, until)
+        return true
     }
 
     /** True within [declaredMealHorizonMin] of the last declaration. */
@@ -291,7 +333,7 @@ object MealKnownGate {
     /** Short state line for `rT.reason` and the logs. */
     fun statusLine(preferences: Preferences, now: Long): String =
         if (isMealKnown(preferences, now)) {
-            "🍽️ meal-known: ${remainingMinutes(preferences, now)}min left"
+            "🍽️ meal-known: ${remainingMinutes(preferences, now)}min left${if (isBigMeal(preferences)) " (big)" else ""}"
         } else {
             "🍽️ meal-known: idle"
         }

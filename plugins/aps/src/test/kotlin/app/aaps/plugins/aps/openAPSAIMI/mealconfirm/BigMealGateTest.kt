@@ -4,8 +4,8 @@ import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.Test
 
 /**
- * Locks when a big meal would raise the max IOB: only after the big meal note or a bolus of 4 U or
- * more, only on a fast rise above 180 after the first 45 minutes.
+ * Locks when a big meal raises the max IOB: only after the big meal note or a bolus of 4 U or more,
+ * only on a rise above 180 after the first 45 minutes, and only until the end of the big meal.
  */
 class BigMealGateTest {
 
@@ -24,6 +24,8 @@ class BigMealGateTest {
         maxIob: Double = 7.0,
         armedAt: Long = t0,
         note: Long = 0L,
+        bigMealMaxIob: Double = 10.0,
+        horizon: Long = 360L,
     ) = BigMealGate.evaluate(
         now = t0 + nowMin * min,
         armedAtMs = armedAt,
@@ -31,6 +33,8 @@ class BigMealGateTest {
         readings = readings,
         iobU = iob,
         maxIobU = maxIob,
+        bigMealMaxIobU = bigMealMaxIob,
+        horizonMin = horizon,
         bigMealNoteMs = note,
     )
 
@@ -40,7 +44,27 @@ class BigMealGateTest {
         assertThat(d.bigMeal).isTrue()
         assertThat(d.release).isTrue()
         assertThat(d.riseMgdl).isEqualTo(45.0)
+        assertThat(d.raisedMaxIobU).isEqualTo(10.0)
         assertThat(d.extraRoomU).isWithin(1e-9).of(3.0)
+    }
+
+    @Test
+    fun theBigMealMaxIobIsTheUsersSetting() {
+        val d = evaluate(nowMin = 95, bigMealMaxIob = 12.0)
+        assertThat(d.raisedMaxIobU).isEqualTo(12.0)
+        assertThat(d.extraRoomU).isWithin(1e-9).of(5.0)
+    }
+
+    @Test
+    fun aBigMealMaxIobUnderTheUsualOneChangesNothing() {
+        assertThat(evaluate(nowMin = 95, bigMealMaxIob = 7.0).release).isFalse()
+        assertThat(evaluate(nowMin = 95, bigMealMaxIob = 5.0).release).isFalse()
+    }
+
+    @Test
+    fun aSteadyRiseOfOneMgdlPerMinuteIsEnough() {
+        assertThat(evaluate(nowMin = 95, readings = curve(95, 190, 195, 200, 205)).release).isTrue()
+        assertThat(evaluate(nowMin = 95, readings = curve(95, 190, 194, 198, 204)).release).isFalse()
     }
 
     @Test
@@ -78,7 +102,8 @@ class BigMealGateTest {
 
     @Test
     fun aSlowRiseOrALowGlucoseOnlyWatches() {
-        assertThat(evaluate(nowMin = 95, readings = curve(95, 190, 195, 200, 210)).release).isFalse()
+        assertThat(evaluate(nowMin = 95, readings = curve(95, 190, 192, 195, 198)).release).isFalse()
+        assertThat(evaluate(nowMin = 95, readings = curve(95, 230, 232, 228, 225)).release).isFalse()
         assertThat(evaluate(nowMin = 95, readings = curve(95, 120, 135, 150, 170)).release).isFalse()
     }
 
@@ -92,8 +117,10 @@ class BigMealGateTest {
     }
 
     @Test
-    fun theRuleEndsFiveHoursAfterTheMeal() {
-        assertThat(evaluate(nowMin = 301).bigMeal).isFalse()
+    fun theRuleEndsWithTheBigMeal() {
+        assertThat(evaluate(nowMin = 360, readings = curve(360, 160, 175, 190, 205)).release).isTrue()
+        assertThat(evaluate(nowMin = 361).bigMeal).isFalse()
+        assertThat(evaluate(nowMin = 241, horizon = 240L).bigMeal).isFalse()
     }
 
     @Test

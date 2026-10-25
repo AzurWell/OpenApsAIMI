@@ -4,8 +4,7 @@ import kotlin.math.max
 
 /**
  * A big meal announced at its start, by the big meal button or by the size of the user's own bolus:
- * when its later rise takes off, let the loop dose it above the usual max IOB instead of holding it
- * back. Shadow only for now.
+ * while its rise goes on, let the loop dose it above the usual max IOB instead of holding it back.
  *
  * ## Why this exists
  *
@@ -19,16 +18,20 @@ import kotlin.math.max
  * - a meal bolus of [BIG_BOLUS_U] or more.
  *
  * Replayed on a month of declared meals, no meal bolus ever reached [BIG_BOLUS_U]: this is a new
- * habit, not a pattern found in the log, so nothing here is tuned yet and the rule only reports.
+ * habit, not a pattern found in the log. In a field log a big bread dinner, declared with the note,
+ * reached the max IOB of 7 U at about 190 mg/dL: from then on each SMB was cut to 0.05 U while the
+ * loop asked for 0.6 U, and glucose climbed to 320 over the next two hours.
  *
  * ## The rule
  *
  * The meal is declared ([MealKnownGate]), and the big meal note was written for it or the user's own
- * boluses for it add up to [BIG_BOLUS_U] or more, in one bolus or in two parts ([mealBolusU]). Between [MIN_DELAY_MIN] and [MAX_DELAY_MIN] after the declaration, on a tick where
- * glucose is at [MIN_BG_MGDL] or above and rose [FAST_RISE_MGDL] or more over the last
- * [RISE_WINDOW_MIN] minutes, the max IOB would be [RAISED_MAX_IOB_U] instead of the user's own.
- * The second-wave hold and the late-wave cap would stand aside on those ticks. As soon as the rise
- * slows down, everything is back to normal. A bolus of 1 to 4 U changes nothing.
+ * boluses for it add up to [BIG_BOLUS_U] or more, in one bolus or in two parts ([mealBolusU]).
+ * From [MIN_DELAY_MIN] after the declaration to the end of the big meal (its horizon, set by the
+ * user, `MealKnownGate.bigMealHorizonMin`), on a tick where glucose is at [MIN_BG_MGDL] or above and
+ * rose [MIN_RISE_MGDL] or more over the last [RISE_WINDOW_MIN] minutes, the max IOB is the big meal
+ * max IOB set by the user instead of the usual one. The second-wave hold and the second-wave rate
+ * cap stand aside on those ticks. As soon as the rise stops, the usual max IOB is back. A bolus of
+ * 1 to 4 U changes nothing.
  *
  * Pure: no clock, no preference. The caller passes the glucose and writes the verdict.
  */
@@ -37,11 +40,10 @@ object BigMealGate {
     const val BIG_BOLUS_U = 4.0
     const val BOLUS_BEFORE_ARM_MIN = 120L
     const val MIN_DELAY_MIN = 45L
-    const val MAX_DELAY_MIN = 300L
     const val MIN_BG_MGDL = 180.0
-    const val FAST_RISE_MGDL = 30.0
+    /** 1 mg/dL per minute: the bread dinner climbed 10 to 15 mg/dL every 5 minutes. */
+    const val MIN_RISE_MGDL = 15.0
     const val RISE_WINDOW_MIN = 15L
-    const val RAISED_MAX_IOB_U = 10.0
 
     private const val MIN_MS = 60_000L
 
@@ -53,7 +55,7 @@ object BigMealGate {
         val bigMeal: Boolean,
         /** The big meal note said so (the bolus may be smaller). */
         val byNote: Boolean = false,
-        /** This tick is a fast rise of that meal: the raised max IOB would apply. */
+        /** This tick is a rise of that meal: the raised max IOB applies. */
         val release: Boolean = false,
         val minutesSinceArm: Long = 0L,
         val bolusU: Double = 0.0,
@@ -61,7 +63,9 @@ object BigMealGate {
         val riseMgdl: Double = 0.0,
         val iobU: Double = 0.0,
         val maxIobU: Double = 0.0,
-        /** Insulin the raised max IOB would leave room for, above what the user's max IOB allows. */
+        /** The big meal max IOB, never under the user's own. */
+        val raisedMaxIobU: Double = 0.0,
+        /** Insulin the raised max IOB leaves room for, above what the user's max IOB allows. */
         val extraRoomU: Double = 0.0,
     ) {
         companion object {
@@ -86,6 +90,8 @@ object BigMealGate {
      * @param bigMealNoteMs when the newest big meal note was written, 0 when there is none.
      * @param readings glucose since a little before [now], any order.
      * @param maxIobU the user's max IOB.
+     * @param bigMealMaxIobU the big meal max IOB set by the user.
+     * @param horizonMin how long a big meal lasts, from its declaration.
      */
     fun evaluate(
         now: Long,
@@ -94,6 +100,8 @@ object BigMealGate {
         readings: List<Reading>,
         iobU: Double,
         maxIobU: Double,
+        bigMealMaxIobU: Double,
+        horizonMin: Long,
         bigMealNoteMs: Long = 0L,
     ): Decision {
         if (armedAtMs <= 0L || now < armedAtMs) return Decision.INACTIVE
@@ -101,7 +109,7 @@ object BigMealGate {
         val byBolus = bolusU.isFinite() && bolusU >= BIG_BOLUS_U
         if (!byNote && !byBolus) return Decision.INACTIVE
         val sinceArm = (now - armedAtMs) / MIN_MS
-        if (sinceArm > MAX_DELAY_MIN) return Decision.INACTIVE
+        if (sinceArm > horizonMin) return Decision.INACTIVE
         val waiting = Decision(
             bigMeal = true,
             byNote = byNote,
@@ -117,10 +125,11 @@ object BigMealGate {
         if (last.timestamp - before.timestamp > (RISE_WINDOW_MIN + 5L) * MIN_MS) return waiting
         val rise = last.mgdl - before.mgdl
         val seen = waiting.copy(bgMgdl = last.mgdl, riseMgdl = rise)
-        if (sinceArm < MIN_DELAY_MIN || last.mgdl < MIN_BG_MGDL || rise < FAST_RISE_MGDL) return seen
-        if (!iobU.isFinite() || !maxIobU.isFinite()) return seen
-        val raised = max(RAISED_MAX_IOB_U, maxIobU)
-        val extra = max(raised - iobU, 0.0) - max(maxIobU - iobU, 0.0)
-        return seen.copy(release = true, extraRoomU = extra)
+        if (sinceArm < MIN_DELAY_MIN || last.mgdl < MIN_BG_MGDL || rise < MIN_RISE_MGDL) return seen
+        if (!iobU.isFinite() || !maxIobU.isFinite() || !bigMealMaxIobU.isFinite()) return seen
+        // A big meal max IOB under the user's own changes nothing.
+        if (bigMealMaxIobU <= maxIobU) return seen
+        val extra = max(bigMealMaxIobU - iobU, 0.0) - max(maxIobU - iobU, 0.0)
+        return seen.copy(release = true, raisedMaxIobU = bigMealMaxIobU, extraRoomU = extra)
     }
 }

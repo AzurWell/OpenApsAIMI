@@ -480,7 +480,14 @@ enum class IntKey(
         max = 360,
         titleResId = R.string.pref_title_aimi_declared_meal_horizon_min,
         summaryResId = R.string.pref_summary_aimi_declared_meal_horizon_min,
-        dependency = BooleanKey.OApsAIMIMealRequiresDeclaration,
+    ),
+    OApsAIMIBigMealHorizonMin(
+        key = "key_aimi_big_meal_horizon_min",
+        defaultValue = 360,
+        min = 120,
+        max = 480,
+        titleResId = R.string.pref_title_aimi_big_meal_horizon_min,
+        summaryResId = R.string.pref_summary_aimi_big_meal_horizon_min,
     ),
     OApsAIMINoMealElevatedBasalPct(
         key = "key_aimi_no_meal_elevated_basal_pct",
