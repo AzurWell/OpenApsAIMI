@@ -493,7 +493,7 @@ enum class IntKey(
         key = "key_aimi_no_meal_elevated_basal_pct",
         defaultValue = 150,
         min = 100,
-        max = 200,
+        max = 300,
         titleResId = R.string.pref_title_aimi_no_meal_elevated_basal_pct,
         summaryResId = R.string.pref_summary_aimi_no_meal_elevated_basal_pct,
     ),
