@@ -29,9 +29,12 @@ import kotlin.math.max
  * From [MIN_DELAY_MIN] after the declaration to the end of the big meal (its horizon, set by the
  * user, `MealKnownGate.bigMealHorizonMin`), on a tick where glucose is at [MIN_BG_MGDL] or above and
  * rose [MIN_RISE_MGDL] or more over the last [RISE_WINDOW_MIN] minutes, the max IOB is the big meal
- * max IOB set by the user instead of the usual one. The second-wave hold and the second-wave rate
- * cap stand aside on those ticks. As soon as the rise stops, the usual max IOB is back. A bolus of
- * 1 to 4 U changes nothing.
+ * max IOB set by the user instead of the usual one. As soon as the rise stops, the usual max IOB is
+ * back. A bolus of 1 to 4 U changes nothing.
+ *
+ * Only the max IOB changes. The second-wave hold and the second-wave rate cap still apply: a second
+ * rise of a big meal is dosed little by little like any other. When they stood aside, a second rise
+ * got about 4.5 U in 35 minutes, the fast dose those rules were made to stop.
  *
  * Pure: no clock, no preference. The caller passes the glucose and writes the verdict.
  */

@@ -20413,11 +20413,11 @@ class DetermineBasalaimiSMB2 @Inject constructor(
      *
      * On the tick result for the same reason as [applyMealDeniedBasalCap]: the SMB and the boosted
      * basal come from several paths, and on these rises about half of the extra insulin is basal.
-     * A big meal that is rising above 180 is not held ([BigMealGate]).
+     * A big meal is held too: [BigMealGate] only raises the max IOB, it never lets a second rise
+     * through faster.
      */
     private fun applySecondWaveHold(result: RT, ctx: AimiTickContext) {
         if (!lastSecondWaveVerdict.hold) return
-        if (lastBigMealDecision.release) return
         val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
         val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp }
         val scheduled = ctx.profile.current_basal
@@ -20441,11 +20441,10 @@ class DetermineBasalaimiSMB2 @Inject constructor(
      * basal above the scheduled rate. See [SecondWaveRateGate].
      *
      * On the tick result, after every path has written its dose, for the same reason as
-     * [applySecondWaveHold]. A big meal that is rising above 180 is not capped ([BigMealGate]).
+     * [applySecondWaveHold]. A big meal is capped too, see [applySecondWaveHold].
      */
     private fun applySecondWaveRateCap(result: RT, ctx: AimiTickContext) {
         if (!lastSecondWaveVerdict.proven) return
-        if (lastBigMealDecision.release) return
         val now = dateUtil.now()
         val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
         val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp }
