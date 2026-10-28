@@ -331,6 +331,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.exp
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -3421,7 +3422,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         }
 
         // 🍛 Big meal (the "gros" note, or 4 U or more of the user's own bolus): it stays declared
-        // longer, and while it rises above 180 the max IOB is the big meal max IOB. Before the
+        // longer, and until its end the max IOB is the big meal max IOB. Before the
         // basal schedule bootstrap on purpose: that is where `maxIob` becomes the tick's limit.
         lastBigMealDecision = evaluateBigMeal(ctx)
         if (lastBigMealDecision.release && lastBigMealDecision.raisedMaxIobU > maxIob) {
@@ -20345,6 +20346,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 applySecondWaveHold(it, ctx)
                 applySecondWaveRateCap(it, ctx)
                 applyBolusEarlyCap(it, ctx)
+                applyBigMealPush(it, ctx)
                 reportBigMeal(it)
             }
         }
@@ -20413,8 +20415,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
      *
      * On the tick result for the same reason as [applyMealDeniedBasalCap]: the SMB and the boosted
      * basal come from several paths, and on these rises about half of the extra insulin is basal.
-     * A big meal is held too: [BigMealGate] only raises the max IOB, it never lets a second rise
-     * through faster.
+     * A big meal is held too, except on a tick where it pushes ([applyBigMealPush] comes after).
      */
     private fun applySecondWaveHold(result: RT, ctx: AimiTickContext) {
         if (!lastSecondWaveVerdict.hold) return
@@ -20441,7 +20442,8 @@ class DetermineBasalaimiSMB2 @Inject constructor(
      * basal above the scheduled rate. See [SecondWaveRateGate].
      *
      * On the tick result, after every path has written its dose, for the same reason as
-     * [applySecondWaveHold]. A big meal is capped too, see [applySecondWaveHold].
+     * [applySecondWaveHold]. A big meal is capped too, except on a tick where it pushes, see
+     * [applyBigMealPush].
      */
     private fun applySecondWaveRateCap(result: RT, ctx: AimiTickContext) {
         if (!lastSecondWaveVerdict.proven) return
@@ -20528,8 +20530,8 @@ class DetermineBasalaimiSMB2 @Inject constructor(
 
     /**
      * A big meal announced by the "gros" note or a bolus of 4 U or more: marks it big (it stays
-     * declared for the big meal duration) and, on a rise of that meal above 180, gives the big meal
-     * max IOB. Called once per tick, before the max IOB is used. See [BigMealGate].
+     * declared for the big meal duration), gives the big meal max IOB until its end, and tells
+     * whether glucose is going up. Called once per tick, before the max IOB is used. See [BigMealGate].
      */
     private fun evaluateBigMeal(ctx: AimiTickContext): BigMealGate.Decision {
         val now = dateUtil.now()
@@ -20562,18 +20564,50 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         )
     }
 
+    /**
+     * A big meal going up: the big meal SMB (up to the big meal max IOB) and the max basal, whatever
+     * the paths and the second-rise rules gave. Last on the tick result, so that it wins over
+     * [applySecondWaveHold], [applySecondWaveRateCap] and [applyBolusEarlyCap]. It never lowers a dose,
+     * and stops on the first tick where glucose is flat or falls. See [BigMealGate].
+     */
+    private fun applyBigMealPush(result: RT, ctx: AimiTickContext) {
+        val decision = lastBigMealDecision
+        if (!decision.push) return
+        val bgNow = ctx.glucoseStatus.glucose
+        val lgs = ctx.profile.lgsThreshold?.toDouble() ?: 70.0
+        if (!bgNow.isFinite() || bgNow < max(lgs, BigMealGate.PUSH_MIN_BG_MGDL)) return
+        val iob = ctx.iobDataArray.firstOrNull()?.iob ?: return
+        val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
+        val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp } ?: 0.0
+        val smb = result.units ?: 0.0
+        val room = decision.raisedMaxIobU - iob
+        val smbTarget = if (ctx.microBolusAllowed && room > 0.0) {
+            floor(min(preferences.get(DoubleKey.OApsAIMIBigMealMaxSmb), room) * 20.0) / 20.0
+        } else 0.0
+        val maxRate = ctx.profile.max_basal
+        val smbUp = smbTarget > smb
+        val rateUp = maxRate.isFinite() && maxRate > rate
+        if (!smbUp && !rateUp) return
+        if (smbUp) result.units = smbTarget
+        if (rateUp) {
+            result.rate = maxRate
+            result.duration = 30
+        }
+        val line = "BIG_MEAL_PUSH" +
+            (if (smbUp) " SMB ${"%.2f".format(smb)}→${"%.2f".format(smbTarget)}" else "") +
+            (if (rateUp) " basal ${"%.2f".format(rate)}→${"%.2f".format(maxRate)}U/h" else "")
+        consoleLog.add("🍛 $line")
+        result.reason.append(" [$line]")
+    }
+
     /** Writes the big meal state of this tick in the reason. See [evaluateBigMeal]. */
     private fun reportBigMeal(result: RT) {
         val decision = lastBigMealDecision
         if (!decision.bigMeal) return
         val head = "🍛 big-meal ${if (decision.byNote) "note " else ""}bolus ${"%.1f".format(decision.bolusU)}U t+${decision.minutesSinceArm}min"
-        val line = if (decision.release) {
-            "$head BG ${"%.0f".format(decision.bgMgdl)} +${"%.0f".format(decision.riseMgdl)}/${BigMealGate.RISE_WINDOW_MIN}min " +
-                "IOB ${"%.2f".format(decision.iobU)} [BIG_MEAL MaxIob ${"%.1f".format(decision.maxIobU)}→" +
-                "${"%.1f".format(decision.raisedMaxIobU)} +${"%.2f".format(decision.extraRoomU)}U]"
-        } else {
-            "$head watching"
-        }
+        val line = "$head BG ${"%.0f".format(decision.bgMgdl)} ${"%+.0f".format(decision.riseMgdl)}/${BigMealGate.RISE_WINDOW_MIN}min " +
+            "IOB ${"%.2f".format(decision.iobU)} ${if (decision.push) "pushing" else "not rising"}" +
+            (if (decision.release) " [BIG_MEAL MaxIob ${"%.1f".format(decision.maxIobU)}→${"%.1f".format(decision.raisedMaxIobU)}]" else "")
         consoleLog.add(line)
         result.reason.append(" $line")
     }

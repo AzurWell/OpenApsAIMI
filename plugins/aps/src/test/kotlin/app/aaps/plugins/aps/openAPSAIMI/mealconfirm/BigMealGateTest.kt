@@ -4,8 +4,8 @@ import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.Test
 
 /**
- * Locks when a big meal raises the max IOB: only after the big meal note or a bolus of 4 U or more,
- * only on a rise above 180 after the first 45 minutes, and only until the end of the big meal.
+ * Locks the big meal rule: after the big meal note or a bolus of 4 U or more, the big meal max IOB
+ * until the end of the big meal, and a push only while glucose is 140 or more and going up.
  */
 class BigMealGateTest {
 
@@ -39,13 +39,23 @@ class BigMealGateTest {
     )
 
     @Test
-    fun aFastRiseOfABigMealRaisesTheMaxIob() {
+    fun aRiseOfABigMealRaisesTheMaxIobAndPushes() {
         val d = evaluate(nowMin = 95)
         assertThat(d.bigMeal).isTrue()
         assertThat(d.release).isTrue()
+        assertThat(d.push).isTrue()
         assertThat(d.riseMgdl).isEqualTo(45.0)
+        assertThat(d.stepMgdl).isEqualTo(15.0)
         assertThat(d.raisedMaxIobU).isEqualTo(10.0)
         assertThat(d.extraRoomU).isWithin(1e-9).of(3.0)
+    }
+
+    @Test
+    fun theMaxIobIsRaisedFromTheStartAndWithoutARise() {
+        assertThat(evaluate(nowMin = 5).release).isTrue()
+        val flat = evaluate(nowMin = 95, readings = curve(95, 230, 232, 228, 225))
+        assertThat(flat.release).isTrue()
+        assertThat(flat.push).isFalse()
     }
 
     @Test
@@ -59,12 +69,25 @@ class BigMealGateTest {
     fun aBigMealMaxIobUnderTheUsualOneChangesNothing() {
         assertThat(evaluate(nowMin = 95, bigMealMaxIob = 7.0).release).isFalse()
         assertThat(evaluate(nowMin = 95, bigMealMaxIob = 5.0).release).isFalse()
+        assertThat(evaluate(nowMin = 95, bigMealMaxIob = 5.0).raisedMaxIobU).isEqualTo(7.0)
     }
 
     @Test
-    fun aSteadyRiseOfOneMgdlPerMinuteIsEnough() {
-        assertThat(evaluate(nowMin = 95, readings = curve(95, 190, 195, 200, 205)).release).isTrue()
-        assertThat(evaluate(nowMin = 95, readings = curve(95, 190, 194, 198, 204)).release).isFalse()
+    fun aSlowRiseOfThreeMgdlPer5MinutesIsEnoughToPush() {
+        assertThat(evaluate(nowMin = 95, readings = curve(95, 200, 203, 206, 209)).push).isTrue()
+        assertThat(evaluate(nowMin = 95, readings = curve(95, 200, 203, 205, 208)).push).isFalse()
+    }
+
+    @Test
+    fun aFlatOrFallingLastStepStopsThePush() {
+        assertThat(evaluate(nowMin = 95, readings = curve(95, 180, 195, 210, 210)).push).isFalse()
+        assertThat(evaluate(nowMin = 95, readings = curve(95, 180, 195, 212, 210)).push).isFalse()
+    }
+
+    @Test
+    fun noPushUnder140() {
+        assertThat(evaluate(nowMin = 95, readings = curve(95, 100, 115, 125, 139)).push).isFalse()
+        assertThat(evaluate(nowMin = 95, readings = curve(95, 100, 115, 125, 140)).push).isTrue()
     }
 
     @Test
@@ -77,14 +100,14 @@ class BigMealGateTest {
     @Test
     fun aBolusUnderFourUnitsChangesNothing() {
         assertThat(evaluate(nowMin = 95, bolus = 3.9)).isEqualTo(BigMealGate.Decision.INACTIVE)
-        assertThat(evaluate(nowMin = 95, bolus = 4.0).release).isTrue()
+        assertThat(evaluate(nowMin = 95, bolus = 4.0).push).isTrue()
     }
 
     @Test
     fun theBigMealNoteIsEnoughWithoutABolus() {
         val d = evaluate(nowMin = 95, bolus = 0.0, note = t0)
         assertThat(d.byNote).isTrue()
-        assertThat(d.release).isTrue()
+        assertThat(d.push).isTrue()
     }
 
     @Test
@@ -94,31 +117,19 @@ class BigMealGateTest {
     }
 
     @Test
-    fun theFirstMinutesAreLeftToTheBolus() {
-        val d = evaluate(nowMin = 40)
-        assertThat(d.bigMeal).isTrue()
-        assertThat(d.release).isFalse()
-    }
-
-    @Test
-    fun aSlowRiseOrALowGlucoseOnlyWatches() {
-        assertThat(evaluate(nowMin = 95, readings = curve(95, 190, 192, 195, 198)).release).isFalse()
-        assertThat(evaluate(nowMin = 95, readings = curve(95, 230, 232, 228, 225)).release).isFalse()
-        assertThat(evaluate(nowMin = 95, readings = curve(95, 120, 135, 150, 170)).release).isFalse()
-    }
-
-    @Test
     fun aGapInTheDataIsNotARise() {
         val gap = listOf(
             BigMealGate.Reading(t0 + 60 * min, 150.0),
             BigMealGate.Reading(t0 + 95 * min, 210.0),
         )
-        assertThat(evaluate(nowMin = 95, readings = gap).release).isFalse()
+        val d = evaluate(nowMin = 95, readings = gap)
+        assertThat(d.release).isTrue()
+        assertThat(d.push).isFalse()
     }
 
     @Test
     fun theRuleEndsWithTheBigMeal() {
-        assertThat(evaluate(nowMin = 360, readings = curve(360, 160, 175, 190, 205)).release).isTrue()
+        assertThat(evaluate(nowMin = 360, readings = curve(360, 160, 175, 190, 205)).push).isTrue()
         assertThat(evaluate(nowMin = 361).bigMeal).isFalse()
         assertThat(evaluate(nowMin = 241, horizon = 240L).bigMeal).isFalse()
     }
