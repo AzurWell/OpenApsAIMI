@@ -2393,6 +2393,7 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
                 add(IntKey.OApsAIMIBigMealHorizonMin)
                 add(DoubleKey.OApsAIMIBigMealMaxIob)
                 add(DoubleKey.OApsAIMIBigMealMaxSmb)
+                add(BooleanKey.OApsAIMIStuckHighSmb)
                 add(IntKey.OApsAIMINoMealElevatedBasalPct)
                 add(DoubleKey.OApsAIMIautodrivesmallPrebolus)
                 add(DoubleKey.OApsAIMIautodrivePrebolus)

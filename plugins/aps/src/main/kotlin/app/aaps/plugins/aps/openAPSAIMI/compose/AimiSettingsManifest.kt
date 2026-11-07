@@ -304,6 +304,7 @@ internal object AimiSettingsManifest {
         AimiSettingEntry(IntKey.OApsAIMIBigMealHorizonMin, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.USER),
         AimiSettingEntry(DoubleKey.OApsAIMIBigMealMaxIob, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.USER),
         AimiSettingEntry(DoubleKey.OApsAIMIBigMealMaxSmb, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.USER),
+        AimiSettingEntry(BooleanKey.OApsAIMIStuckHighSmb, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
         AimiSettingEntry(IntKey.OApsAIMINoMealElevatedBasalPct, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
         AimiSettingEntry(BooleanKey.OApsAIMIRiseCeilingGuard, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Protection, AimiSettingsWriter.USER),
         AimiSettingEntry(BooleanKey.OApsAIMIEffortActivityProtection, AimiSettingsLevel.ADVANCED, AimiBehaviorFamilyId.Physio, AimiSettingsWriter.USER),

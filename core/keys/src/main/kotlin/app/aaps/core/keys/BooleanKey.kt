@@ -385,6 +385,12 @@ enum class BooleanKey(
         titleResId = R.string.pref_title_aimi_anticip_meal_evidence,
         summaryResId = R.string.pref_summary_aimi_anticip_meal_evidence,
     ),
+    OApsAIMIStuckHighSmb(
+        key = "key_aimi_stuck_high_smb",
+        defaultValue = true,
+        titleResId = R.string.pref_title_aimi_stuck_high_smb,
+        summaryResId = R.string.pref_summary_aimi_stuck_high_smb,
+    ),
     OApsAIMIRiseCeilingGuard(
         key = "key_aimi_rise_ceiling_guard",
         defaultValue = false,

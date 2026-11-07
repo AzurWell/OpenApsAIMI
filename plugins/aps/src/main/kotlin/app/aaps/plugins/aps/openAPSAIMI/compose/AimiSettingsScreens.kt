@@ -1108,6 +1108,7 @@ internal object AimiSettingsScreens {
                 IntKey.OApsAIMIBigMealHorizonMin,
                 DoubleKey.OApsAIMIBigMealMaxIob,
                 DoubleKey.OApsAIMIBigMealMaxSmb,
+                BooleanKey.OApsAIMIStuckHighSmb,
                 IntKey.OApsAIMINoMealElevatedBasalPct,
                 DoubleKey.OApsAIMIautodrivesmallPrebolus,
                 DoubleKey.OApsAIMIautodrivePrebolus,

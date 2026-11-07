@@ -81,6 +81,7 @@ import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealKnownGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.SecondWaveGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.SecondWaveRateGate
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.StuckHighGate
 import app.aaps.plugins.aps.openAPSAIMI.smb.PredictionGapDamper
 import app.aaps.plugins.aps.openAPSAIMI.ml.AimiSmbTrainer
 import app.aaps.plugins.aps.openAPSAIMI.ml.SmbRefinementFeatureSchema
@@ -20350,6 +20351,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 applyBolusEarlyCap(it, ctx)
                 applyBigMealPush(it, ctx)
                 reportBigMeal(it)
+                applyStuckHighSmb(it, ctx)
             }
         }
     }
@@ -20600,6 +20602,48 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             (if (rateUp) " basal ${"%.2f".format(rate)}→${"%.2f".format(maxRate)}U/h" else "")
         consoleLog.add("🍛 $line")
         result.reason.append(" [$line]")
+    }
+
+    /**
+     * Glucose stuck at 200 or more for an hour with no meal declared: at least 0.5 U of SMB every
+     * 15 minutes, 3 U at most over 2 hours. Last on the tick result. It never lowers a dose and never
+     * touches the basal. See [StuckHighGate].
+     */
+    private fun applyStuckHighSmb(result: RT, ctx: AimiTickContext) {
+        if (!preferences.get(BooleanKey.OApsAIMIStuckHighSmb)) return
+        if (!ctx.microBolusAllowed) return
+        val now = dateUtil.now()
+        val iob = ctx.iobDataArray.firstOrNull()?.iob ?: return
+        val from = now - (StuckHighGate.STUCK_MIN + 15L) * 60_000L
+        val readings = (iobCobCalculator.ads.getBucketedDataTableCopy() ?: return)
+            .filter { !it.filledGap && it.timestamp >= from }
+            .map { StuckHighGate.Reading(it.timestamp, it.recalculated) }
+        val smbs = mealGateBoluses(now)
+            .filter { it.isValid && it.type == BS.Type.SMB }
+            .map { it.timestamp to it.amount }
+        val smb = result.units ?: 0.0
+        val decision = StuckHighGate.evaluate(
+            now = now,
+            mealDeclared = !mealInterpretationBlocked(now),
+            activity = exerciseInsulinLockoutActive || aimiContextActivityActive || activityProtectionMode,
+            readings = readings,
+            iobU = iob,
+            maxIobU = maxIob,
+            proposedSmbU = smb,
+            smbTimesAndUnits = smbs,
+        )
+        if (!decision.stuck) return
+        val head = "📈 stuck-high BG ${"%.0f".format(decision.bgMgdl)} ${"%+.0f".format(decision.fall30Mgdl)}/30min " +
+            "IOB ${"%.2f".format(iob)} SMB ${"%.2f".format(decision.smbLastWindowU)}/${StuckHighGate.WINDOW_MIN}min " +
+            "${"%.2f".format(decision.smbLastEpisodeU)}/${StuckHighGate.EPISODE_MIN}min"
+        if (decision.smbTargetU <= smb) {
+            result.reason.append(" $head ${decision.why}")
+            return
+        }
+        result.units = decision.smbTargetU
+        val line = "STUCK_HIGH_SMB ${"%.2f".format(smb)}→${"%.2f".format(decision.smbTargetU)}"
+        consoleLog.add("📈 $line")
+        result.reason.append(" $head [$line]")
     }
 
     /** Writes the big meal state of this tick in the reason. See [evaluateBigMeal]. */
