@@ -74,6 +74,17 @@ object SecondWaveGate {
     /** Above this, glucose is left to the loop: a high plateau needs its insulin. */
     const val HOLD_CEILING_MGDL = 200.0
 
+    /**
+     * On a second wave under [IOB_CAP_BELOW_MGDL], nothing above the scheduled basal and no SMB once
+     * this much insulin is on board, for every declared meal. Across the user's declared meals, the
+     * insulin on board during the second wave was the only measure that told the second waves
+     * followed by a low from the others on meals left out of the fit; a cap at 5 U held back too many
+     * second waves that needed their insulin.
+     */
+    const val IOB_CAP_U = 6.0
+    /** A high second wave keeps the usual max IOB: the second waves that climbed past 250 needed it. */
+    const val IOB_CAP_BELOW_MGDL = 220.0
+
     private const val MIN_MS = 60_000L
 
     data class Verdict(
@@ -83,6 +94,8 @@ object SecondWaveGate {
         val reason: String,
         /** True when the rise climbed [PROOF_MGDL] above its trough and is under [HOLD_CEILING_MGDL], see [SecondWaveRateGate]. */
         val proven: Boolean = false,
+        /** True on any tick of a second wave: the first wave of the meal has come down. */
+        val secondWave: Boolean = false,
     ) {
 
         companion object {
@@ -94,6 +107,10 @@ object SecondWaveGate {
     /** True once the first wave of the meal has peaked and come down. */
     fun firstWaveCameDown(startMgdl: Double, peakMgdl: Double, troughMgdl: Double): Boolean =
         peakMgdl - startMgdl >= FIRST_WAVE_MIN_MGDL && peakMgdl - troughMgdl >= DESCENT_MIN_MGDL
+
+    /** True when the second wave must stop adding: see [IOB_CAP_U]. */
+    fun iobCapped(verdict: Verdict, bgMgdl: Double, iobU: Double): Boolean =
+        verdict.secondWave && bgMgdl.isFinite() && bgMgdl < IOB_CAP_BELOW_MGDL && iobU.isFinite() && iobU >= IOB_CAP_U
 
     /**
      * The whole rule on plain numbers, kept apart so it can be unit tested.
@@ -133,9 +150,9 @@ object SecondWaveGate {
             "${shape.troughMgdl.toInt()} (peak ${shape.peakMgdl.toInt()})"
         return when {
             holds(bgMgdl, shape.startMgdl, shape.peakMgdl, shape.troughMgdl) ->
-                Verdict(hold = true, reason = "2nd rise held $where")
-            bgMgdl >= HOLD_CEILING_MGDL -> Verdict(hold = false, reason = "2nd rise above ${HOLD_CEILING_MGDL.toInt()}, left alone $where")
-            else -> Verdict(hold = false, reason = "2nd rise proven $where", proven = true)
+                Verdict(hold = true, reason = "2nd rise held $where", secondWave = true)
+            bgMgdl >= HOLD_CEILING_MGDL -> Verdict(hold = false, reason = "2nd rise above ${HOLD_CEILING_MGDL.toInt()}, left alone $where", secondWave = true)
+            else -> Verdict(hold = false, reason = "2nd rise proven $where", proven = true, secondWave = true)
         }
     }
 }

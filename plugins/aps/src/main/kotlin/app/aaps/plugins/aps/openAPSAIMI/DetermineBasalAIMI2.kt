@@ -20350,6 +20350,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 applySecondWaveRateCap(it, ctx)
                 applyBolusEarlyCap(it, ctx)
                 applyBigMealPush(it, ctx)
+                applySecondWaveIobCap(it, ctx)
                 reportBigMeal(it)
                 applyStuckHighSmb(it, ctx)
             }
@@ -20483,6 +20484,32 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             (if (smbCut) " SMB ${"%.2f".format(smb)}→${"%.2f".format(decision.smbAllowedU)}" else "") +
             (if (rateCut) " basal ${"%.2f".format(rate)}→${"%.2f".format(allowedRate)}U/h" else "")
         consoleLog.add("🪜 $line")
+        result.reason.append(" [$line]")
+    }
+
+    /**
+     * A second wave of any declared meal, under 220 mg/dL, with 6 U or more on board: no SMB and
+     * nothing above the scheduled basal. After [applyBigMealPush], so that it wins over it. See
+     * [SecondWaveGate.IOB_CAP_U].
+     */
+    private fun applySecondWaveIobCap(result: RT, ctx: AimiTickContext) {
+        val iob = ctx.iobDataArray.firstOrNull()?.iob ?: return
+        if (!SecondWaveGate.iobCapped(lastSecondWaveVerdict, ctx.glucoseStatus.glucose, iob)) return
+        val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
+        val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp }
+        val scheduled = ctx.profile.current_basal
+        val smb = result.units ?: 0.0
+        val basalOver = rate != null && scheduled.isFinite() && rate > scheduled
+        if (smb <= 0.0 && !basalOver) return
+        if (smb > 0.0) result.units = 0.0
+        if (basalOver) {
+            result.rate = scheduled
+            if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
+        }
+        val line = "SECOND_WAVE_IOB_CAP IOB ${"%.2f".format(iob)}≥${"%.0f".format(SecondWaveGate.IOB_CAP_U)}" +
+            (if (smb > 0.0) " SMB ${"%.2f".format(smb)}→0" else "") +
+            (if (basalOver) " basal ${"%.2f".format(rate)}→${"%.2f".format(scheduled)}U/h" else "")
+        consoleLog.add("🌊 $line")
         result.reason.append(" [$line]")
     }
 
