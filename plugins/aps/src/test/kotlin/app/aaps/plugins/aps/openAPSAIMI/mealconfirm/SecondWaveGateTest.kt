@@ -145,4 +145,13 @@ class SecondWaveGateTest {
         listOf(120, 180, 140).forEach { MealKnownGate.trackBg(p, it.toDouble()) }
         assertThat(SecondWaveGate.evaluate(p, t0 + 120 * min, declaredCobG = 30.0, bgMgdl = 150.0).hold).isFalse()
     }
+
+    /** A second wave that climbs above the first peak stays a second wave: proven, then capped. */
+    @Test
+    fun aSecondWaveAboveTheFirstPeakKeepsItsShape() {
+        val v = replay(listOf(143, 150, 160, 167, 160, 150, 140, 137, 150, 165, 173, 185, 195))
+        // 173 is above the first peak 167: still proven, not idle.
+        assertThat(v[10].proven).isTrue()
+        assertThat(v[12].proven).isTrue()
+    }
 }

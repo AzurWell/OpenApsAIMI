@@ -149,4 +149,57 @@ class BigMealGateTest {
         )
         assertThat(BigMealGate.mealBolusU(t0, t0 + 60 * min, boluses)).isWithin(1e-9).of(6.0)
     }
+    // -----------------------------------------------------------------------------------------
+    // The second wave is pushed less
+    // -----------------------------------------------------------------------------------------
+
+    /** Glucose every 5 minutes from the declaration (t0) to [mgdl].size - 1 readings later. */
+    private fun fromArm(vararg mgdl: Int) =
+        mgdl.mapIndexed { i, v -> BigMealGate.Reading(t0 + i * 5L * min, v.toDouble()) }
+
+    /** First wave 131 -> 199, down to 105, then a slow second wave 105 -> 148 (+12 per 15 min). */
+    private val slowSecondWave = fromArm(
+        131, 150, 172, 190, 199, 196, 185, 170, 150, 130, 115, 107, 105,
+        108, 112, 115, 119, 123, 126, 130, 135, 141, 148,
+    )
+
+    @Test
+    fun aSecondWavePushesOnlyUpToFiveUnitsOnBoard() {
+        val now = (slowSecondWave.size - 1) * 5L
+        val low = evaluate(nowMin = now, readings = slowSecondWave, iob = 1.1)
+        assertThat(low.secondWave).isTrue()
+        assertThat(low.push).isTrue()
+        assertThat(low.pushMaxIobU).isEqualTo(BigMealGate.SECOND_WAVE_PUSH_MAX_IOB_U)
+        // The big meal max IOB is gone on the second wave.
+        assertThat(low.release).isFalse()
+        assertThat(low.raisedMaxIobU).isEqualTo(7.0)
+        val full = evaluate(nowMin = now, readings = slowSecondWave, iob = 5.0)
+        assertThat(full.push).isFalse()
+    }
+
+    @Test
+    fun theFirstWaveStillPushesUpToTheBigMealMaxIob() {
+        val firstWave = fromArm(131, 150, 172, 190)
+        val d = evaluate(nowMin = 15, readings = firstWave, iob = 6.0)
+        assertThat(d.secondWave).isFalse()
+        assertThat(d.push).isTrue()
+        assertThat(d.release).isTrue()
+        assertThat(d.pushMaxIobU).isEqualTo(10.0)
+    }
+
+    /** A second wave climbing above the first peak is still a second wave. */
+    @Test
+    fun aSecondWaveAboveTheFirstPeakIsStillASecondWave() {
+        val r = fromArm(160, 190, 229, 210, 180, 150, 144, 160, 180, 200, 215, 235)
+        val d = evaluate(nowMin = (r.size - 1) * 5L, readings = r, iob = 4.0)
+        assertThat(d.secondWave).isTrue()
+        assertThat(d.push).isTrue()
+        assertThat(evaluate(nowMin = (r.size - 1) * 5L, readings = r, iob = 5.2).push).isFalse()
+    }
+
+    /** A dip after the bolus, before any peak, is not a first wave come down. */
+    @Test
+    fun aPrebolusDipIsNotAFirstWave() {
+        assertThat(BigMealGate.firstWaveCameDown(t0, fromArm(150, 140, 125, 115, 120, 140, 160))).isFalse()
+    }
 }

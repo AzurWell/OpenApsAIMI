@@ -20551,7 +20551,8 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         if (MealKnownGate.markBigMeal(preferences)) {
             consoleLog.add("🍛 BIG_MEAL: meal marked big, declared for ${MealKnownGate.bigMealHorizonMin(preferences)}min")
         }
-        val from = now - (BigMealGate.RISE_WINDOW_MIN + 10L) * 60_000L
+        // From the declaration: the shape of the meal tells the first wave from the second.
+        val from = min(armedAt, now - (BigMealGate.RISE_WINDOW_MIN + 10L) * 60_000L)
         val readings = (iobCobCalculator.ads.getBucketedDataTableCopy() ?: return BigMealGate.Decision.INACTIVE)
             .filter { !it.filledGap && it.timestamp >= from }
             .map { BigMealGate.Reading(it.timestamp, it.recalculated) }
@@ -20584,13 +20585,16 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
         val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp } ?: 0.0
         val smb = result.units ?: 0.0
-        val room = decision.raisedMaxIobU - iob
+        // First wave: up to the big meal max IOB. Second wave: up to a lower limit only.
+        val room = min(decision.raisedMaxIobU, decision.pushMaxIobU) - iob
+        if (room <= 0.0) return
         val smbTarget = if (ctx.microBolusAllowed && room > 0.0) {
             floor(min(preferences.get(DoubleKey.OApsAIMIBigMealMaxSmb), room) * 20.0) / 20.0
         } else 0.0
         val maxRate = ctx.profile.max_basal
         val smbUp = smbTarget > smb
-        val rateUp = maxRate.isFinite() && maxRate > rate
+        // Half an hour of max basal is about half a unit more on board: not when the room is smaller.
+        val rateUp = maxRate.isFinite() && maxRate > rate && room >= 0.5
         if (!smbUp && !rateUp) return
         if (smbUp) result.units = smbTarget
         if (rateUp) {
@@ -20650,7 +20654,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     private fun reportBigMeal(result: RT) {
         val decision = lastBigMealDecision
         if (!decision.bigMeal) return
-        val head = "🍛 big-meal ${if (decision.byNote) "note " else ""}bolus ${"%.1f".format(decision.bolusU)}U t+${decision.minutesSinceArm}min"
+        val head = "🍛 big-meal ${if (decision.byNote) "note " else ""}${if (decision.secondWave) "2nd-wave push<=${"%.1f".format(decision.pushMaxIobU)}U " else ""}bolus ${"%.1f".format(decision.bolusU)}U t+${decision.minutesSinceArm}min"
         val line = "$head BG ${"%.0f".format(decision.bgMgdl)} ${"%+.0f".format(decision.riseMgdl)}/${BigMealGate.RISE_WINDOW_MIN}min " +
             "IOB ${"%.2f".format(decision.iobU)} ${if (decision.push) "pushing" else "not rising"}" +
             (if (decision.release) " [BIG_MEAL MaxIob ${"%.1f".format(decision.maxIobU)}→${"%.1f".format(decision.raisedMaxIobU)}]" else "")

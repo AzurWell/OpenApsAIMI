@@ -36,6 +36,14 @@ import kotlin.math.max
  * As soon as glucose is flat or falls, the push stops and the loop doses as usual. Under
  * [PUSH_MIN_BG_MGDL] there is no push: a big bolus given low must not be stacked on.
  *
+ * ## The second wave is pushed less
+ *
+ * Once the first wave of the big meal has peaked and come down ([firstWaveCameDown], read on the
+ * glucose since the declaration), the big meal max IOB no longer applies and the push only fills up
+ * to [SECOND_WAVE_PUSH_MAX_IOB_U] of insulin on board. Pushing a slow second wave up to the big meal
+ * max IOB sent 6 to 8 U in half an hour on a rise of 10 to 15 mg/dL per 15 minutes, and glucose
+ * then fell fast. Above that, the second-wave hold and rate cap dose the rise as for any meal.
+ *
  * Pure: no clock, no preference. The caller passes the glucose and writes the verdict.
  */
 object BigMealGate {
@@ -49,6 +57,12 @@ object BigMealGate {
     const val RISE_WINDOW_MIN = 15L
     /** The last step: the previous reading must be at most this far back. */
     private const val STEP_MAX_MIN = 10L
+    /** The first wave climbed at least this far above the glucose at the declaration... */
+    const val FIRST_WAVE_MIN_RISE_MGDL = 20.0
+    /** ...then came down at least this far from its peak: what follows is the second wave. */
+    const val FIRST_WAVE_DESCENT_MGDL = 30.0
+    /** On the second wave the push fills the insulin on board up to this, never to the big meal max IOB. */
+    const val SECOND_WAVE_PUSH_MAX_IOB_U = 5.0
 
     private const val MIN_MS = 60_000L
 
@@ -76,6 +90,10 @@ object BigMealGate {
         val raisedMaxIobU: Double = 0.0,
         /** Insulin the raised max IOB leaves room for, above what the user's max IOB allows. */
         val extraRoomU: Double = 0.0,
+        /** The first wave has peaked and come down: this is the second wave. */
+        val secondWave: Boolean = false,
+        /** The push fills the insulin on board up to this. */
+        val pushMaxIobU: Double = 0.0,
     ) {
         companion object {
             val INACTIVE = Decision(bigMeal = false)
@@ -94,10 +112,26 @@ object BigMealGate {
             .sumOf { it.second }
 
     /**
+     * True once glucose since the declaration climbed [FIRST_WAVE_MIN_RISE_MGDL] above its first
+     * reading and later came down [FIRST_WAVE_DESCENT_MGDL] from its peak. It stays true for the rest
+     * of the meal, even when the second wave climbs above the first peak.
+     */
+    fun firstWaveCameDown(armedAtMs: Long, readings: List<Reading>): Boolean {
+        val since = readings.filter { it.timestamp >= armedAtMs && it.mgdl.isFinite() && it.mgdl > 39.0 }.sortedBy { it.timestamp }
+        val start = since.firstOrNull()?.mgdl ?: return false
+        var peak = start
+        for (r in since) {
+            if (r.mgdl > peak) peak = r.mgdl
+            if (peak - start >= FIRST_WAVE_MIN_RISE_MGDL && peak - r.mgdl >= FIRST_WAVE_DESCENT_MGDL) return true
+        }
+        return false
+    }
+
+    /**
      * @param armedAtMs when the meal was declared ([MealKnownGate]), 0 when there is none.
      * @param bolusU the user's own boluses for this meal, see [mealBolusU].
      * @param bigMealNoteMs when the newest big meal note was written, 0 when there is none.
-     * @param readings glucose since a little before [now], any order.
+     * @param readings glucose since the declaration, any order.
      * @param maxIobU the user's max IOB.
      * @param bigMealMaxIobU the big meal max IOB set by the user.
      * @param horizonMin how long a big meal lasts, from its declaration.
@@ -120,8 +154,10 @@ object BigMealGate {
         val sinceArm = (now - armedAtMs) / MIN_MS
         if (sinceArm > horizonMin) return Decision.INACTIVE
         if (!iobU.isFinite() || !maxIobU.isFinite() || !bigMealMaxIobU.isFinite()) return Decision.INACTIVE
-        // A big meal max IOB under the user's own changes nothing.
-        val raised = bigMealMaxIobU > maxIobU
+        val secondWave = firstWaveCameDown(armedAtMs, readings.filter { it.timestamp <= now })
+        // A big meal max IOB under the user's own changes nothing. On the second wave it is gone.
+        val raised = bigMealMaxIobU > maxIobU && !secondWave
+        val pushMax = if (secondWave) SECOND_WAVE_PUSH_MAX_IOB_U else max(bigMealMaxIobU, maxIobU)
         val extra = if (raised) max(bigMealMaxIobU - iobU, 0.0) - max(maxIobU - iobU, 0.0) else 0.0
         val base = Decision(
             bigMeal = true,
@@ -133,6 +169,8 @@ object BigMealGate {
             maxIobU = maxIobU,
             raisedMaxIobU = if (raised) bigMealMaxIobU else maxIobU,
             extraRoomU = extra,
+            secondWave = secondWave,
+            pushMaxIobU = pushMax,
         )
         val valid = readings.filter { it.timestamp <= now && it.mgdl.isFinite() && it.mgdl > 39.0 }.sortedBy { it.timestamp }
         val last = valid.lastOrNull() ?: return base
@@ -143,7 +181,7 @@ object BigMealGate {
         if (last.timestamp - previous.timestamp > STEP_MAX_MIN * MIN_MS) return base.copy(bgMgdl = last.mgdl)
         val rise = last.mgdl - before.mgdl
         val step = last.mgdl - previous.mgdl
-        val push = last.mgdl >= PUSH_MIN_BG_MGDL && rise >= PUSH_MIN_RISE_MGDL && step > 0.0
+        val push = last.mgdl >= PUSH_MIN_BG_MGDL && rise >= PUSH_MIN_RISE_MGDL && step > 0.0 && iobU < pushMax
         return base.copy(bgMgdl = last.mgdl, riseMgdl = rise, stepMgdl = step, push = push)
     }
 }

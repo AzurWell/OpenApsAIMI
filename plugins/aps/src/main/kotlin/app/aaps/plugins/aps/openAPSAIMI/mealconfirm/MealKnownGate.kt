@@ -210,7 +210,14 @@ object MealKnownGate {
             preferences.put(AimiLongKey.MealKnownBgTroughMgdl, value)
             return
         }
-        if (value > preferences.get(AimiLongKey.MealKnownBgPeakMgdl)) {
+        val start = preferences.get(AimiLongKey.MealKnownBgStartMgdl).toDouble()
+        val peak = preferences.get(AimiLongKey.MealKnownBgPeakMgdl)
+        val trough = preferences.get(AimiLongKey.MealKnownBgTroughMgdl)
+        if (value > peak) {
+            // Once the first wave has come down, the shape is kept: a second wave climbing above the
+            // first peak is still a second wave (it used to wipe the trough and free the second-rise
+            // rules exactly when the rise was strongest).
+            if (SecondWaveGate.firstWaveCameDown(start, peak.toDouble(), trough.toDouble())) return
             preferences.put(AimiLongKey.MealKnownBgPeakMgdl, value)
             preferences.put(AimiLongKey.MealKnownBgTroughMgdl, value)
         } else if (value < preferences.get(AimiLongKey.MealKnownBgTroughMgdl)) {
