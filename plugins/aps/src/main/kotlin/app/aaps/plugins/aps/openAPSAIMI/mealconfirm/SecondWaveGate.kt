@@ -5,6 +5,10 @@ import app.aaps.core.keys.interfaces.Preferences
 /**
  * What to do with a rise that comes after the first wave of a declared meal has come down.
  *
+ * **Since 2026-11-10 only the insulin on board is capped ([IOB_CAP_U], see [iobCapped]).** The
+ * hold described below (nothing above the profile until the rise is proven) and the proven-rise rate
+ * cap are no longer applied: the verdict still reports where the rise stands, for the logs.
+ *
  * Hours after a meal the loop has no memory of it: carbs read as zero, so every rise is
  * rediscovered as a brand new meal and dosed like one — rise exemption, 6.5 U/h, the largest SMB on
  * every tick — on top of the insulin the first wave still has on board.
@@ -75,15 +79,15 @@ object SecondWaveGate {
     const val HOLD_CEILING_MGDL = 200.0
 
     /**
-     * On a second wave under [IOB_CAP_BELOW_MGDL], nothing above the scheduled basal and no SMB once
-     * this much insulin is on board, for every declared meal. Across the user's declared meals, the
+     * On a second wave, nothing above the scheduled basal and no SMB once this much insulin is on
+     * board, for every declared meal and whatever the glucose. Across the user's declared meals, the
      * insulin on board during the second wave was the only measure that told the second waves
-     * followed by a low from the others on meals left out of the fit; a cap at 5 U held back too many
-     * second waves that needed their insulin.
+     * followed by a low from the others on meals left out of the fit; the speed of the rise and
+     * stopping at its inflection did not. Below the cap the second wave is dosed as usual from its
+     * first tick: holding a hesitating rise only delayed the insulin, which then went in all at once
+     * past 200 and stacked. A cap at 5 U held back too many second waves that needed their insulin.
      */
     const val IOB_CAP_U = 6.0
-    /** A high second wave keeps the usual max IOB: the second waves that climbed past 250 needed it. */
-    const val IOB_CAP_BELOW_MGDL = 220.0
 
     private const val MIN_MS = 60_000L
 
@@ -109,8 +113,8 @@ object SecondWaveGate {
         peakMgdl - startMgdl >= FIRST_WAVE_MIN_MGDL && peakMgdl - troughMgdl >= DESCENT_MIN_MGDL
 
     /** True when the second wave must stop adding: see [IOB_CAP_U]. */
-    fun iobCapped(verdict: Verdict, bgMgdl: Double, iobU: Double): Boolean =
-        verdict.secondWave && bgMgdl.isFinite() && bgMgdl < IOB_CAP_BELOW_MGDL && iobU.isFinite() && iobU >= IOB_CAP_U
+    fun iobCapped(verdict: Verdict, iobU: Double): Boolean =
+        verdict.secondWave && iobU.isFinite() && iobU >= IOB_CAP_U
 
     /**
      * The whole rule on plain numbers, kept apart so it can be unit tested.
@@ -150,9 +154,9 @@ object SecondWaveGate {
             "${shape.troughMgdl.toInt()} (peak ${shape.peakMgdl.toInt()})"
         return when {
             holds(bgMgdl, shape.startMgdl, shape.peakMgdl, shape.troughMgdl) ->
-                Verdict(hold = true, reason = "2nd rise held $where", secondWave = true)
-            bgMgdl >= HOLD_CEILING_MGDL -> Verdict(hold = false, reason = "2nd rise above ${HOLD_CEILING_MGDL.toInt()}, left alone $where", secondWave = true)
-            else -> Verdict(hold = false, reason = "2nd rise proven $where", proven = true, secondWave = true)
+                Verdict(hold = true, reason = "2nd wave $where", secondWave = true)
+            bgMgdl >= HOLD_CEILING_MGDL -> Verdict(hold = false, reason = "2nd wave above ${HOLD_CEILING_MGDL.toInt()} $where", secondWave = true)
+            else -> Verdict(hold = false, reason = "2nd wave proven $where", proven = true, secondWave = true)
         }
     }
 }

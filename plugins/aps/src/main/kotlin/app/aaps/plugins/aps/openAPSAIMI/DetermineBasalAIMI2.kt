@@ -80,7 +80,6 @@ import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.BolusEarlyCapGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealKnownGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.SecondWaveGate
-import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.SecondWaveRateGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.StuckHighGate
 import app.aaps.plugins.aps.openAPSAIMI.smb.PredictionGapDamper
 import app.aaps.plugins.aps.openAPSAIMI.ml.AimiSmbTrainer
@@ -3437,7 +3436,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         }
 
         // Second rise of the same meal. Worked out every tick, applied at the end of the tick
-        // (applySecondWaveHold) only when the key is on.
+        // (applySecondWaveIobCap).
         lastSecondWaveVerdict = SecondWaveGate.evaluate(
             preferences = preferences,
             now = dateUtil.now(),
@@ -20346,8 +20345,6 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         ) {
             AimiDetermineBasalTickOrchestrator.run(this, ctx).also {
                 applyMealDeniedBasalCap(it, ctx)
-                applySecondWaveHold(it, ctx)
-                applySecondWaveRateCap(it, ctx)
                 applyBolusEarlyCap(it, ctx)
                 applyBigMealPush(it, ctx)
                 applySecondWaveIobCap(it, ctx)
@@ -20415,86 +20412,14 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     }
 
     /**
-     * A second rise of a meal that has not proven itself yet: nothing above the scheduled basal,
-     * no SMB. See [SecondWaveGate].
-     *
-     * On the tick result for the same reason as [applyMealDeniedBasalCap]: the SMB and the boosted
-     * basal come from several paths, and on these rises about half of the extra insulin is basal.
-     * A big meal is held too, except on a tick where it pushes ([applyBigMealPush] comes after).
-     */
-    private fun applySecondWaveHold(result: RT, ctx: AimiTickContext) {
-        if (!lastSecondWaveVerdict.hold) return
-        val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
-        val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp }
-        val scheduled = ctx.profile.current_basal
-        val smb = result.units ?: 0.0
-        val basalOver = rate != null && scheduled.isFinite() && rate > scheduled
-        if (smb <= 0.0 && !basalOver) return
-        if (smb > 0.0) result.units = 0.0
-        if (basalOver) {
-            result.rate = scheduled
-            if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
-        }
-        val line = "SECOND_WAVE_HOLD" +
-            (if (smb > 0.0) " SMB ${"%.2f".format(smb)}→0" else "") +
-            (if (basalOver) " basal ${"%.2f".format(rate)}→${"%.2f".format(scheduled)}U/h" else "")
-        consoleLog.add("🌊 $line (${lastSecondWaveVerdict.reason})")
-        result.reason.append(" [$line]")
-    }
-
-    /**
-     * A second rise that has proven itself, under 200 mg/dL: at most 1 U of SMB per 30 minutes, and no
-     * basal above the scheduled rate. See [SecondWaveRateGate].
-     *
-     * On the tick result, after every path has written its dose, for the same reason as
-     * [applySecondWaveHold]. A big meal is capped too, except on a tick where it pushes, see
-     * [applyBigMealPush].
-     */
-    private fun applySecondWaveRateCap(result: RT, ctx: AimiTickContext) {
-        if (!lastSecondWaveVerdict.proven) return
-        val now = dateUtil.now()
-        val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
-        val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp }
-        val smb = result.units ?: 0.0
-        val smbLastWindow = mealGateBoluses(now)
-            .filter { it.isValid && it.type == BS.Type.SMB && it.timestamp > now - SecondWaveRateGate.WINDOW_MIN * 60_000L }
-            .sumOf { it.amount }
-        val decision = SecondWaveRateGate.evaluate(
-            proven = true,
-            bgMgdl = ctx.glucoseStatus.glucose,
-            smbLastWindowU = smbLastWindow,
-            proposedSmbU = smb,
-            proposedRateUph = rate,
-            scheduledUph = ctx.profile.current_basal,
-        )
-        if (!decision.active) return
-        val status = "🪜 2nd-rise rate SMB ${"%.2f".format(decision.smbSpentU)}/${"%.1f".format(SecondWaveRateGate.SMB_BUDGET_U)}U per ${SecondWaveRateGate.WINDOW_MIN}min"
-        consoleLog.add(status)
-        result.reason.append(" $status")
-        if (!decision.cuts(smb, rate)) return
-        val smbCut = decision.smbAllowedU < smb
-        val allowedRate = decision.rateAllowedUph
-        val rateCut = rate != null && allowedRate != null && allowedRate < rate
-        if (smbCut) result.units = decision.smbAllowedU
-        if (rateCut) {
-            result.rate = allowedRate
-            if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
-        }
-        val line = "SECOND_WAVE_RATE_CAP" +
-            (if (smbCut) " SMB ${"%.2f".format(smb)}→${"%.2f".format(decision.smbAllowedU)}" else "") +
-            (if (rateCut) " basal ${"%.2f".format(rate)}→${"%.2f".format(allowedRate)}U/h" else "")
-        consoleLog.add("🪜 $line")
-        result.reason.append(" [$line]")
-    }
-
-    /**
-     * A second wave of any declared meal, under 220 mg/dL, with 6 U or more on board: no SMB and
-     * nothing above the scheduled basal. After [applyBigMealPush], so that it wins over it. See
-     * [SecondWaveGate.IOB_CAP_U].
+     * A second wave of any declared meal, with 6 U or more on board, whatever the glucose: no SMB
+     * and nothing above the scheduled basal. After [applyBigMealPush], so that it wins over it. See
+     * [SecondWaveGate.IOB_CAP_U]. Below the cap the second wave is dosed as usual, from its first
+     * tick: the brake is on stacking, not on a hesitating curve.
      */
     private fun applySecondWaveIobCap(result: RT, ctx: AimiTickContext) {
         val iob = ctx.iobDataArray.firstOrNull()?.iob ?: return
-        if (!SecondWaveGate.iobCapped(lastSecondWaveVerdict, ctx.glucoseStatus.glucose, iob)) return
+        if (!SecondWaveGate.iobCapped(lastSecondWaveVerdict, iob)) return
         val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
         val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp }
         val scheduled = ctx.profile.current_basal
@@ -20518,7 +20443,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
      * basal above the scheduled rate. See [BolusEarlyCapGate].
      *
      * On the tick result, after every path has written its dose, for the same reason as
-     * [applySecondWaveHold].
+     * [applyMealDeniedBasalCap].
      */
     private fun applyBolusEarlyCap(result: RT, ctx: AimiTickContext) {
         val now = dateUtil.now()
@@ -20598,8 +20523,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
 
     /**
      * A big meal going up: the big meal SMB (up to the big meal max IOB) and the max basal, whatever
-     * the paths and the second-rise rules gave. Last on the tick result, so that it wins over
-     * [applySecondWaveHold], [applySecondWaveRateCap] and [applyBolusEarlyCap]. It never lowers a dose,
+     * the paths gave. On the tick result, so that it wins over [applyBolusEarlyCap]. It never lowers a dose,
      * and stops on the first tick where glucose is flat or falls. See [BigMealGate].
      */
     private fun applyBigMealPush(result: RT, ctx: AimiTickContext) {

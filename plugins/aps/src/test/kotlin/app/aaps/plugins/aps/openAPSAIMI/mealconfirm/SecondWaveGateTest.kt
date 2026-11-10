@@ -155,19 +155,19 @@ class SecondWaveGateTest {
         assertThat(v[12].proven).isTrue()
     }
 
-    /** Any tick of a second wave under 220 stops adding at 6 U on board; above 220 it is left alone. */
+    /** Any tick of a second wave stops adding at 6 U on board, whatever the glucose; below 6 U it is dosed as usual. */
     @Test
-    fun aSecondWaveStopsAddingAtSixUnitsOnBoardUnder220() {
+    fun aSecondWaveStopsAddingAtSixUnitsOnBoard() {
         val v = replay(listOf(143, 150, 160, 167, 160, 150, 140, 137, 150, 165, 173, 185, 195))
-        val held = v[8]
+        val early = v[8]
         val proven = v[12]
-        assertThat(held.secondWave).isTrue()
-        assertThat(SecondWaveGate.iobCapped(held, 150.0, 6.0)).isTrue()
-        assertThat(SecondWaveGate.iobCapped(proven, 195.0, 6.2)).isTrue()
-        assertThat(SecondWaveGate.iobCapped(proven, 195.0, 5.9)).isFalse()
-        assertThat(SecondWaveGate.iobCapped(proven, 225.0, 8.0)).isFalse()
+        assertThat(early.secondWave).isTrue()
+        assertThat(SecondWaveGate.iobCapped(early, 6.0)).isTrue()
+        assertThat(SecondWaveGate.iobCapped(early, 3.0)).isFalse()
+        assertThat(SecondWaveGate.iobCapped(proven, 6.2)).isTrue()
+        assertThat(SecondWaveGate.iobCapped(proven, 5.9)).isFalse()
         // The first wave is never capped by this rule.
         assertThat(v[3].secondWave).isFalse()
-        assertThat(SecondWaveGate.iobCapped(v[3], 167.0, 8.0)).isFalse()
+        assertThat(SecondWaveGate.iobCapped(v[3], 8.0)).isFalse()
     }
 }
