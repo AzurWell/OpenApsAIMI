@@ -180,7 +180,10 @@ object SecondWaveGate {
         if (!firstWaveCameDown(shape.startMgdl, shape.peakMgdl, shape.troughMgdl)) {
             // No first wave to speak of above the declaration: a late rise is a second wave all the
             // same, and stays one until the next declaration. Only [IOB_CAP_U] applies to it.
+            // Not for a big meal: a big (often fatty) meal can bring its first wave late, and
+            // BigMealGate keeps its own reading of the waves.
             if (!shape.lateWave || elapsedMin < LATE_MIN_ELAPSED_MIN) return Verdict.INACTIVE
+            if (MealKnownGate.isBigMeal(preferences)) return Verdict.INACTIVE
             val riseMgdl = (bgMgdl - shape.lateTroughMgdl).toInt()
             return Verdict(
                 hold = false,
