@@ -80,6 +80,7 @@ import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.BolusEarlyCapGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealKnownGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.SecondWaveGate
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.SmallMealGate
 import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.StuckHighGate
 import app.aaps.plugins.aps.openAPSAIMI.smb.PredictionGapDamper
 import app.aaps.plugins.aps.openAPSAIMI.ml.AimiSmbTrainer
@@ -3391,6 +3392,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         // Placed here and not in [runDetermineBasalTickInner]: `therapy` only exists in this
         // function, and `bg`/`delta` are only refreshed by the stage just above.
         bigMealNoteMs = therapy.bigMealNoteMs
+        smallMealNoteMs = therapy.smallMealNoteMs
         if (MealKnownGate.armFromNote(preferences, dateUtil.now(), therapy.mealKnownStartMs)) {
             consoleLog.add("🍽️ MEAL_KNOWN: armed by the eating note")
             if (MealConfirmationGate.clearDenialForDeclaredMeal(preferences, dateUtil.now())) {
@@ -3428,6 +3430,17 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         if (lastBigMealDecision.release && lastBigMealDecision.raisedMaxIobU > maxIob) {
             consoleLog.add("🍛 BIG_MEAL: MaxIob ${"%.1f".format(maxIob)}→${"%.1f".format(lastBigMealDecision.raisedMaxIobU)}")
             maxIob = lastBigMealDecision.raisedMaxIobU
+        }
+
+        // 🥗 Small meal (the "petit" note): the whole meal stays under the small meal max IOB.
+        // After the big meal on purpose: the small meal wins.
+        smallMealActive = SmallMealGate.isActive(
+            MealKnownGate.msSinceArm(preferences, dateUtil.now())?.let { dateUtil.now() - it },
+            smallMealNoteMs,
+        )
+        if (smallMealActive && maxIob > SmallMealGate.MAX_IOB_U) {
+            consoleLog.add("🥗 SMALL_MEAL: MaxIob ${"%.1f".format(maxIob)}→${"%.1f".format(SmallMealGate.MAX_IOB_U)}")
+            maxIob = SmallMealGate.MAX_IOB_U
         }
 
         // Peak and trough since the meal was declared — the shape test of the second-rise gate.
@@ -12525,6 +12538,12 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     /** Newest "gros" note (big meal button), read with the other notes. See [BigMealGate]. */
     private var bigMealNoteMs = 0L
 
+    /** Newest "petit" note (small meal button), read with the other notes. See [SmallMealGate]. */
+    private var smallMealNoteMs = 0L
+
+    /** True on this tick when the declared meal is a small one. See [SmallMealGate]. */
+    private var smallMealActive = false
+
     /** Big meal state of this tick, worked out before the max IOB is used. See [evaluateBigMeal]. */
     private var lastBigMealDecision = BigMealGate.Decision.INACTIVE
     private var maxSMB = 0.5
@@ -20348,6 +20367,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 applyBolusEarlyCap(it, ctx)
                 applyBigMealPush(it, ctx)
                 applySecondWaveIobCap(it, ctx)
+                applySmallMealIobCap(it, ctx)
                 reportBigMeal(it)
                 applyStuckHighSmb(it, ctx)
             }
@@ -20435,6 +20455,37 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             (if (smb > 0.0) " SMB ${"%.2f".format(smb)}→0" else "") +
             (if (basalOver) " basal ${"%.2f".format(rate)}→${"%.2f".format(scheduled)}U/h" else "")
         consoleLog.add("🌊 $line")
+        result.reason.append(" [$line]")
+    }
+
+    /**
+     * Small meal ("petit" note): IOB + SMB stays under [SmallMealGate.MAX_IOB_U] for the whole meal,
+     * and the basal goes back to the scheduled rate once the limit is reached. On the tick result,
+     * after the big meal push and the second wave cap, so that it wins over both.
+     */
+    private fun applySmallMealIobCap(result: RT, ctx: AimiTickContext) {
+        if (!smallMealActive) return
+        val iob = ctx.iobDataArray.firstOrNull()?.iob ?: return
+        val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
+        val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp }
+        val scheduled = ctx.profile.current_basal
+        val smb = result.units ?: 0.0
+        val allowedSmb = SmallMealGate.allowedSmbU(smb, iob)
+        val smbCut = smb > 0.0 && allowedSmb < smb
+        val basalOver = SmallMealGate.basalCapped(iob) && rate != null && scheduled.isFinite() && rate > scheduled
+        if (!smbCut && !basalOver) {
+            result.reason.append(" 🥗 small meal: max IOB ${"%.0f".format(SmallMealGate.MAX_IOB_U)}")
+            return
+        }
+        if (smbCut) result.units = allowedSmb
+        if (basalOver) {
+            result.rate = scheduled
+            if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
+        }
+        val line = "SMALL_MEAL_IOB_CAP IOB ${"%.2f".format(iob)}/${"%.0f".format(SmallMealGate.MAX_IOB_U)}" +
+            (if (smbCut) " SMB ${"%.2f".format(smb)}→${"%.2f".format(allowedSmb)}" else "") +
+            (if (basalOver) " basal ${"%.2f".format(rate)}→${"%.2f".format(scheduled)}U/h" else "")
+        consoleLog.add("🥗 $line")
         result.reason.append(" [$line]")
     }
 
