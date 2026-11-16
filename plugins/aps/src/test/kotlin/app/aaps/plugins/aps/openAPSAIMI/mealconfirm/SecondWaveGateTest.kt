@@ -38,7 +38,7 @@ class SecondWaveGateTest {
         MealKnownGate.arm(p, t0)
         return bg.mapIndexed { i, value ->
             val now = t0 + i * stepMin * min
-            MealKnownGate.trackBg(p, value.toDouble())
+            MealKnownGate.trackBg(p, value.toDouble(), now)
             SecondWaveGate.evaluate(p, now, declaredCobG = 0.0, bgMgdl = value.toDouble())
         }
     }
@@ -169,5 +169,94 @@ class SecondWaveGateTest {
         // The first wave is never capped by this rule.
         assertThat(v[3].secondWave).isFalse()
         assertThat(SecondWaveGate.iobCapped(v[3], 8.0)).isFalse()
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The late rise: a second wave whatever the first wave looked like
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * A meal declared while glucose was already going up: the first wave is only 5 above the
+     * declaration, comes down, and glucose climbs again from one hour on. From two hours on that
+     * rise is a second wave, and it stops adding at 6 U on board.
+     */
+    @Test
+    fun aLateRiseAfterATinyFirstWaveIsASecondWave() {
+        val v = replay(listOf(140, 143, 145, 138, 125, 112, 104, 110, 121, 133, 146, 158, 171, 183, 190))
+        // Before two hours the rise is left alone, even 54 above its trough.
+        assertThat(v.take(12).none { it.secondWave }).isTrue()
+        // t+120: 67 above the trough of 104.
+        assertThat(v[12].secondWave).isTrue()
+        assertThat(v[12].hold).isFalse()
+        assertThat(v[12].reason).isEqualTo("2nd wave late t+120min +67/30 over trough 104 since t+60min")
+        assertThat(SecondWaveGate.iobCapped(v[12], 6.5)).isTrue()
+        assertThat(SecondWaveGate.iobCapped(v[12], 4.0)).isFalse()
+        assertThat(v.drop(12).all { it.secondWave }).isTrue()
+    }
+
+    /** A first wave of 14, a shallow trough, then a slow rise: a second wave once it is 30 above the trough. */
+    @Test
+    fun aSlowLateRiseIsASecondWaveOnceItIsThirtyAboveItsTrough() {
+        val v = replay(listOf(125, 131, 137, 139, 134, 128, 124, 121, 123, 127, 133, 139, 143, 146, 149, 152, 158, 164, 170))
+        // t+120 to t+140: 22 to 28 above the trough of 121, not enough.
+        assertThat(v.take(15).none { it.secondWave }).isTrue()
+        // t+150: 31 above.
+        assertThat(v[15].secondWave).isTrue()
+        assertThat(SecondWaveGate.iobCapped(v[18], 6.7)).isTrue()
+    }
+
+    /** A rise of 20 above the trough at t+150 is not a second wave. */
+    @Test
+    fun aSmallLateRiseIsLeftAlone() {
+        val v = replay(listOf(120, 128, 136, 138, 132, 126, 120, 116, 114, 112, 113, 118, 122, 127, 130, 132, 131, 128))
+        assertThat(v.none { it.secondWave }).isTrue()
+        assertThat(v.all { it.reason == "idle" }).isTrue()
+        assertThat(SecondWaveGate.iobCapped(v[15], 8.0)).isFalse()
+    }
+
+    /** Once seen, the late rise stays a second wave when glucose comes back down and climbs again. */
+    @Test
+    fun aLateRiseStaysASecondWaveForTheRestOfTheMeal() {
+        // The rise tops out 10 above the declaration: the first-wave shape never applies here.
+        val v = replay(listOf(140, 143, 145, 138, 125, 112, 104, 110, 121, 130, 138, 144, 150, 146, 135, 122, 112, 118, 125))
+        assertThat(v[12].secondWave).isTrue()
+        // 125 is only 21 above the trough, on the way up again with insulin still on board.
+        assertThat(v[18].reason).isEqualTo("2nd wave late t+180min +21/30 over trough 104 since t+60min")
+        assertThat(v[18].secondWave).isTrue()
+        assertThat(SecondWaveGate.iobCapped(v[18], 6.0)).isTrue()
+    }
+
+    /** The late trough starts one hour after the declaration: a prebolus dip before that does not count. */
+    @Test
+    fun theLateTroughStartsOneHourAfterTheDeclaration() {
+        // Lowest value 95 at t+30; from t+60 the lowest is 118.
+        val v = replay(listOf(120, 108, 100, 95, 102, 110, 118, 124, 130, 134, 138, 140, 142, 144, 149))
+        // t+120 to t+130: 24 and 26 above 118. Measured from 95 they would be 47 and 49.
+        assertThat(v.take(14).none { it.secondWave }).isTrue()
+        // t+140: 31 above 118.
+        assertThat(v[14].secondWave).isTrue()
+    }
+
+    /** A new declaration forgets the late rise of the meal before it. */
+    @Test
+    fun aNewDeclarationForgetsTheLateRise() {
+        val p = prefs()
+        MealKnownGate.arm(p, t0)
+        MealKnownGate.trackBg(p, 140.0, t0)
+        MealKnownGate.trackBg(p, 105.0, t0 + 60 * min)
+        MealKnownGate.trackBg(p, 150.0, t0 + 130 * min)
+        assertThat(SecondWaveGate.evaluate(p, t0 + 130 * min, declaredCobG = 0.0, bgMgdl = 150.0).secondWave).isTrue()
+        MealKnownGate.arm(p, t0 + 135 * min)
+        MealKnownGate.trackBg(p, 155.0, t0 + 200 * min)
+        assertThat(SecondWaveGate.evaluate(p, t0 + 200 * min, declaredCobG = 0.0, bgMgdl = 155.0).secondWave).isFalse()
+    }
+
+    /** The rule on plain numbers. */
+    @Test
+    fun theLateRiseNeedsTwoHoursAndThirtyAboveTheTrough() {
+        assertThat(SecondWaveGate.lateRise(elapsedMin = 120, bgMgdl = 141.0, lateTroughMgdl = 111.0)).isTrue()
+        assertThat(SecondWaveGate.lateRise(elapsedMin = 119, bgMgdl = 190.0, lateTroughMgdl = 111.0)).isFalse()
+        assertThat(SecondWaveGate.lateRise(elapsedMin = 150, bgMgdl = 140.0, lateTroughMgdl = 111.0)).isFalse()
+        assertThat(SecondWaveGate.lateRise(elapsedMin = 150, bgMgdl = 140.0, lateTroughMgdl = 0.0)).isFalse()
     }
 }

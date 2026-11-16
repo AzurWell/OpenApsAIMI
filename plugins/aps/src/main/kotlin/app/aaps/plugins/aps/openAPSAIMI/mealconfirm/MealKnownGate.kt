@@ -191,8 +191,20 @@ object MealKnownGate {
         resetBgShape(preferences)
     }
 
-    /** Where glucose started, how high the meal took it, and how low it came back since. */
-    data class BgShape(val startMgdl: Double, val peakMgdl: Double, val troughMgdl: Double)
+    /**
+     * Where glucose started, how high the meal took it, and how low it came back since.
+     *
+     * @param lateTroughMgdl lowest glucose from [SecondWaveGate.MIN_ELAPSED_MIN] after the
+     * declaration, 0 when nothing was recorded there yet.
+     * @param lateWave a late rise was seen on this meal, see [SecondWaveGate.lateRise].
+     */
+    data class BgShape(
+        val startMgdl: Double,
+        val peakMgdl: Double,
+        val troughMgdl: Double,
+        val lateTroughMgdl: Double = 0.0,
+        val lateWave: Boolean = false,
+    )
 
     /**
      * Follows the glucose of the meal. Called once per tick while a meal is declared.
@@ -200,10 +212,14 @@ object MealKnownGate {
      * This is what tells a second rise from the first wave, and from a meal that simply never came
      * down: a second rise goes peak → trough → up again. A new peak restarts the trough, so a real
      * wave that climbs past the first one is back to "first wave" for [SecondWaveGate].
+     *
+     * @param now the time of the tick. It dates the late trough and the late rise ([trackLateRise]);
+     * with 0 only the peak and the trough are followed.
      */
-    fun trackBg(preferences: Preferences, bgMgdl: Double) {
+    fun trackBg(preferences: Preferences, bgMgdl: Double, now: Long = 0L) {
         if (!bgMgdl.isFinite() || bgMgdl <= 0.0) return
         val value = bgMgdl.toLong()
+        trackLateRise(preferences, value, now)
         if (preferences.get(AimiLongKey.MealKnownBgStartMgdl) <= 0L) {
             preferences.put(AimiLongKey.MealKnownBgStartMgdl, value)
             preferences.put(AimiLongKey.MealKnownBgPeakMgdl, value)
@@ -225,6 +241,27 @@ object MealKnownGate {
         }
     }
 
+    /**
+     * Follows the lowest glucose from [SecondWaveGate.MIN_ELAPSED_MIN] after the declaration, and
+     * remembers the first tick where glucose stood far enough above it late in the meal
+     * ([SecondWaveGate.lateRise]). Unlike the peak and the trough above, this one does not depend on
+     * the height of the first wave, and a new peak does not wipe it. Once seen, the late rise stays
+     * seen until the next declaration.
+     */
+    private fun trackLateRise(preferences: Preferences, value: Long, now: Long) {
+        val elapsedMin = (msSinceArm(preferences, now) ?: return) / MIN_MS
+        if (elapsedMin < SecondWaveGate.MIN_ELAPSED_MIN || elapsedMin > SecondWaveGate.MAX_ELAPSED_MIN) return
+        val lateTrough = preferences.get(AimiLongKey.MealKnownBgLateTroughMgdl)
+        if (lateTrough <= 0L || value < lateTrough) {
+            preferences.put(AimiLongKey.MealKnownBgLateTroughMgdl, value)
+            return
+        }
+        if (preferences.get(AimiLongKey.MealKnownLateWaveAt) > 0L) return
+        if (SecondWaveGate.lateRise(elapsedMin, value.toDouble(), lateTrough.toDouble())) {
+            preferences.put(AimiLongKey.MealKnownLateWaveAt, now)
+        }
+    }
+
     /** The glucose of the current meal so far, or null when nothing was recorded yet. */
     fun bgShape(preferences: Preferences): BgShape? {
         val start = preferences.get(AimiLongKey.MealKnownBgStartMgdl)
@@ -233,6 +270,8 @@ object MealKnownGate {
             startMgdl = start.toDouble(),
             peakMgdl = preferences.get(AimiLongKey.MealKnownBgPeakMgdl).toDouble(),
             troughMgdl = preferences.get(AimiLongKey.MealKnownBgTroughMgdl).toDouble(),
+            lateTroughMgdl = preferences.get(AimiLongKey.MealKnownBgLateTroughMgdl).toDouble(),
+            lateWave = preferences.get(AimiLongKey.MealKnownLateWaveAt) > 0L,
         )
     }
 
@@ -240,6 +279,8 @@ object MealKnownGate {
         preferences.put(AimiLongKey.MealKnownBgStartMgdl, 0L)
         preferences.put(AimiLongKey.MealKnownBgPeakMgdl, 0L)
         preferences.put(AimiLongKey.MealKnownBgTroughMgdl, 0L)
+        preferences.put(AimiLongKey.MealKnownBgLateTroughMgdl, 0L)
+        preferences.put(AimiLongKey.MealKnownLateWaveAt, 0L)
     }
 
     /** Closes the window, for example when the user says they are not eating after all. */

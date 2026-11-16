@@ -3432,7 +3432,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
 
         // Peak and trough since the meal was declared — the shape test of the second-rise gate.
         if (MealKnownGate.msSinceArm(preferences, dateUtil.now()) != null) {
-            MealKnownGate.trackBg(preferences, bg)
+            MealKnownGate.trackBg(preferences, bg, dateUtil.now())
         }
 
         // Second rise of the same meal. Worked out every tick, applied at the end of the tick

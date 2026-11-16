@@ -44,6 +44,10 @@ enum class AimiLongKey(
     MealKnownBgPeakMgdl("oa_aimi_meal_known_bg_peak_mgdl", 0L),
     /** Lowest glucose (mg/dL) since that peak. */
     MealKnownBgTroughMgdl("oa_aimi_meal_known_bg_trough_mgdl", 0L),
+    /** Lowest glucose (mg/dL) from one hour after the meal was declared. 0 = nothing recorded yet. */
+    MealKnownBgLateTroughMgdl("oa_aimi_meal_known_bg_late_trough_mgdl", 0L),
+    /** When a late rise of the current meal was first seen (`SecondWaveGate.lateRise`). 0 = not seen. */
+    MealKnownLateWaveAt("oa_aimi_meal_known_late_wave_at_ms", 0L),
     /** Last time the silent prompt was escalated to an audible alarm. */
     MealPromptEscalatedAt("oa_aimi_meal_prompt_escalated_at_ms", 0L),
     /** Time of the manual bolus that opened the current meal window. 0 = opened by a note, or none. */

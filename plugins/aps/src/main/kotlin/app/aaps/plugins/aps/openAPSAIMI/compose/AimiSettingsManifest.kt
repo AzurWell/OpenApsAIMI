@@ -524,6 +524,8 @@ internal object AimiSettingsManifest {
         AimiSettingEntry(AimiLongKey.MealKnownBgStartMgdl, AimiSettingsLevel.EXPERT, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.LOOP),
         AimiSettingEntry(AimiLongKey.MealKnownBgPeakMgdl, AimiSettingsLevel.EXPERT, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.LOOP),
         AimiSettingEntry(AimiLongKey.MealKnownBgTroughMgdl, AimiSettingsLevel.EXPERT, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.LOOP),
+        AimiSettingEntry(AimiLongKey.MealKnownBgLateTroughMgdl, AimiSettingsLevel.EXPERT, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.LOOP),
+        AimiSettingEntry(AimiLongKey.MealKnownLateWaveAt, AimiSettingsLevel.EXPERT, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.LOOP),
         AimiSettingEntry(AimiLongKey.MealPromptEscalatedAt, AimiSettingsLevel.EXPERT, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.LOOP),
         AimiSettingEntry(AimiLongKey.MealKnownBolusAt, AimiSettingsLevel.EXPERT, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.LOOP),
         AimiSettingEntry(AimiLongKey.MealKnownBigMealAt, AimiSettingsLevel.EXPERT, AimiBehaviorFamilyId.MealCapture, AimiSettingsWriter.LOOP),

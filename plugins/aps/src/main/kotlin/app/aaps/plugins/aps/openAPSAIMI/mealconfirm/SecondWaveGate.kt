@@ -5,6 +5,10 @@ import app.aaps.core.keys.interfaces.Preferences
 /**
  * What to do with a rise that comes after the first wave of a declared meal has come down.
  *
+ * A second wave is recognised in two ways: the first wave peaked and came down
+ * ([firstWaveCameDown]), or, late in the meal, glucose climbed well above its late trough whatever
+ * the first wave looked like ([lateRise]).
+ *
  * **Since 2026-11-10 only the insulin on board is capped ([IOB_CAP_U], see [iobCapped]).** The
  * hold described below (nothing above the profile until the rise is proven) and the proven-rise rate
  * cap are no longer applied: the verdict still reports where the rise stands, for the logs.
@@ -89,6 +93,15 @@ object SecondWaveGate {
      */
     const val IOB_CAP_U = 6.0
 
+    /**
+     * From this long after the declaration, a rise needs no first wave before it to be a second
+     * wave: see [lateRise].
+     */
+    const val LATE_MIN_ELAPSED_MIN = 120L
+
+    /** A late rise is a second wave once glucose stands this far above its late trough. */
+    const val LATE_RISE_MGDL = 30.0
+
     private const val MIN_MS = 60_000L
 
     data class Verdict(
@@ -98,7 +111,7 @@ object SecondWaveGate {
         val reason: String,
         /** True when the rise climbed [PROOF_MGDL] above its trough and is under [HOLD_CEILING_MGDL], see [SecondWaveRateGate]. */
         val proven: Boolean = false,
-        /** True on any tick of a second wave: the first wave of the meal has come down. */
+        /** True on any tick of a second wave: the first wave of the meal has come down, or a late rise was seen. */
         val secondWave: Boolean = false,
     ) {
 
@@ -111,6 +124,23 @@ object SecondWaveGate {
     /** True once the first wave of the meal has peaked and come down. */
     fun firstWaveCameDown(startMgdl: Double, peakMgdl: Double, troughMgdl: Double): Boolean =
         peakMgdl - startMgdl >= FIRST_WAVE_MIN_MGDL && peakMgdl - troughMgdl >= DESCENT_MIN_MGDL
+
+    /**
+     * The second way to be a second wave, whatever the first wave looked like.
+     *
+     * [firstWaveCameDown] needs a first wave of [FIRST_WAVE_MIN_MGDL] above the glucose at the
+     * declaration. A meal declared while glucose is already going up has most of its first wave
+     * before the declaration: what is left of it above the start is too small to count, the shape is
+     * never read as "came down", and the rise that follows two hours later is dosed as a brand new
+     * first wave on top of the insulin already on board.
+     *
+     * So from [LATE_MIN_ELAPSED_MIN] after the declaration, glucose standing [LATE_RISE_MGDL] or more
+     * above its lowest value since [MIN_ELAPSED_MIN] is a second wave. A smaller rise is left alone.
+     *
+     * @param lateTroughMgdl lowest glucose from [MIN_ELAPSED_MIN] after the declaration, 0 when unknown.
+     */
+    fun lateRise(elapsedMin: Long, bgMgdl: Double, lateTroughMgdl: Double): Boolean =
+        elapsedMin >= LATE_MIN_ELAPSED_MIN && lateTroughMgdl > 0.0 && bgMgdl - lateTroughMgdl >= LATE_RISE_MGDL
 
     /** True when the second wave must stop adding: see [IOB_CAP_U]. */
     fun iobCapped(verdict: Verdict, iobU: Double): Boolean =
@@ -147,7 +177,18 @@ object SecondWaveGate {
         val elapsedMin = (MealKnownGate.msSinceArm(preferences, now) ?: return Verdict.INACTIVE) / MIN_MS
         if (elapsedMin < MIN_ELAPSED_MIN || elapsedMin > MAX_ELAPSED_MIN) return Verdict.INACTIVE
         val shape = MealKnownGate.bgShape(preferences) ?: return Verdict.INACTIVE
-        if (!firstWaveCameDown(shape.startMgdl, shape.peakMgdl, shape.troughMgdl)) return Verdict.INACTIVE
+        if (!firstWaveCameDown(shape.startMgdl, shape.peakMgdl, shape.troughMgdl)) {
+            // No first wave to speak of above the declaration: a late rise is a second wave all the
+            // same, and stays one until the next declaration. Only [IOB_CAP_U] applies to it.
+            if (!shape.lateWave || elapsedMin < LATE_MIN_ELAPSED_MIN) return Verdict.INACTIVE
+            val riseMgdl = (bgMgdl - shape.lateTroughMgdl).toInt()
+            return Verdict(
+                hold = false,
+                reason = "2nd wave late t+${elapsedMin}min ${if (riseMgdl >= 0) "+" else ""}$riseMgdl/${LATE_RISE_MGDL.toInt()} " +
+                    "over trough ${shape.lateTroughMgdl.toInt()} since t+${MIN_ELAPSED_MIN}min",
+                secondWave = true,
+            )
+        }
 
         val rise = bgMgdl - shape.troughMgdl
         val where = "t+${elapsedMin}min +${rise.toInt()}/${PROOF_MGDL.toInt()} over trough " +
