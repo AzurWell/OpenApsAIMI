@@ -75,6 +75,12 @@ import app.aaps.core.data.model.HR
 import app.aaps.plugins.aps.openAPSAIMI.model.DecisionResult
 import app.aaps.plugins.aps.openAPSAIMI.ml.AimiCorpusPruner
 import app.aaps.plugins.aps.openAPSAIMI.safety.BioSyncDiaRule
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.BigMealGate
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.BolusEarlyCapGate
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealConfirmationGate
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.MealKnownGate
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.SecondWaveGate
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.SmallMealGate
 import app.aaps.plugins.aps.openAPSAIMI.ml.AimiSmbTrainer
 import app.aaps.plugins.aps.openAPSAIMI.ml.SmbRefinementFeatureSchema
 import app.aaps.plugins.aps.openAPSAIMI.ml.SmbTrainingRowBuffer
@@ -125,6 +131,7 @@ import app.aaps.plugins.aps.openAPSAIMI.prediction.PredictionSanityResult
 import app.aaps.plugins.aps.openAPSAIMI.prediction.minPredictedAcrossCurves
 import app.aaps.plugins.aps.openAPSAIMI.quality.ReplayQualityExportBuilder
 import app.aaps.plugins.aps.openAPSAIMI.quality.SmbBindingTrace
+import app.aaps.plugins.aps.openAPSAIMI.recursive.MealChannelHint
 import app.aaps.plugins.aps.openAPSAIMI.recursive.BasalFirstChannel
 import app.aaps.plugins.aps.openAPSAIMI.recursive.RecursiveBeliefAuthorityGate
 import app.aaps.plugins.aps.openAPSAIMI.release.HyperSeverityClassifier
@@ -179,6 +186,7 @@ import app.aaps.plugins.aps.openAPSAIMI.physio.MealAbsorptionPhaseEngine
 import app.aaps.plugins.aps.openAPSAIMI.physio.MealAbsorptionRuntime
 import app.aaps.plugins.aps.openAPSAIMI.safety.SmbRestoreCeiling
 import app.aaps.plugins.aps.openAPSAIMI.safety.SmbSwitchGate
+import app.aaps.plugins.aps.openAPSAIMI.physio.MealAbsorptionPhaseHysteresis
 import app.aaps.plugins.aps.openAPSAIMI.physio.PhysiologicalPhaseClassifier
 import app.aaps.plugins.aps.openAPSAIMI.physio.PhysioContextMTR
 import app.aaps.plugins.aps.openAPSAIMI.physio.PhysioLatentState
@@ -322,6 +330,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.exp
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -2306,12 +2315,39 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     private val bolusQueryCache = mutableMapOf<Pair<Long, Boolean>, List<BS>>()
 
     /**
+     * Boluses of the last [SecondWaveGate.MAX_ELAPSED_MIN] minutes, read once per tick, synchronously.
+     *
+     * Deliberately **not** [getBolusesFromTimeCached]: that helper returns a snapshot refreshed in
+     * the background by whichever caller ran first, so it is empty on the first ticks after a
+     * restart and only ever as deep as the narrowest window any caller asked for (30 min in
+     * places). The meal gates use it to decide whether the user already bolused for this meal: a
+     * bolus missing from that list leaves a real meal undeclared.
+     */
+    private var mealGateBolusesThisTick: List<BS>? = null
+
+    /** @see mealGateBolusesThisTick */
+    private fun mealGateBoluses(now: Long): List<BS> =
+        mealGateBolusesThisTick ?: (
+            try {
+                runBlocking {
+                    // Widest window any meal gate needs: the meal's own clock runs past
+                    // MealKnownGate's 3 h window.
+                    persistenceLayer.getBolusesFromTime(now - SecondWaveGate.MAX_ELAPSED_MIN * 60_000L, true)
+                }
+            } catch (e: Exception) {
+                consoleError.add("🍽️ MEAL_GATES: bolus read failed (${e.message}) — gates stay silent this tick")
+                emptyList()
+            }
+            ).also { mealGateBolusesThisTick = it }
+
+    /**
      * Phase 2: early orchestration — cache lifecycle, telemetry pulse, meal hydration,
      * advisor/TDD bootstrap, profile snapshot, BOOTSTRAP phase marker.
      */
     private fun runEarlyDetermineBasalStages(ctx: AimiTickContext): AimiDetermineBasalEarlyTickState {
         determineBasalInvocationCaches.beginInvocation()
         bolusQueryCache.clear()
+        mealGateBolusesThisTick = null
         consoleError = mutableListOf()
         consoleLog = mutableListOf()
         if (::aapsLogger.isInitialized) {
@@ -2418,8 +2454,12 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             consoleLog.add("🛡️ BASAL_UNIFIED_SCALING: H=${"%.2f".format(hMult)}x / N=${"%.2f".format(nMult)}x -> Applied=${"%.2f".format(adaptiveMult)}x")
         }
         lastAdaptiveBasalTrace = buildAdaptiveBasalTrace(hMultRaw, hMult, nDecision, adaptiveMult)
+        // Under the hyper line, a rise that is not a meal must not get the meal priority this opens.
+        val notMealUnderHyperLine = mealInterpretationBlocked() &&
+            ctx.glucoseStatus.glucose < MealConfirmationGate.DENIED_HYPER_LINE_MGDL
         val isConfirmedHighRiseLocal =
-            ctx.glucoseStatus.glucose > 150.0 && ctx.glucoseStatus.combinedDelta > 1.5 && (ctx.glucoseStatus.bgAcceleration ?: 0.0) > 0.4
+            ctx.glucoseStatus.glucose > 150.0 && ctx.glucoseStatus.combinedDelta > 1.5 && (ctx.glucoseStatus.bgAcceleration ?: 0.0) > 0.4 &&
+                !notMealUnderHyperLine
         applyThyroidModule(ctx.profile)
         return isConfirmedHighRiseLocal
     }
@@ -3344,6 +3384,82 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         this.coffeeMaxBasalUph = profile.max_basal
         observeCircadianMealProfile(ctx.currentTime)
         this.iscalibration = therapy.calibrationTime
+
+        // 🍽️ Light meal button: an "eating" note opens the window and doses nothing.
+        // Placed here and not in [runDetermineBasalTickInner]: `therapy` only exists in this
+        // function, and `bg`/`delta` are only refreshed by the stage just above.
+        bigMealNoteMs = therapy.bigMealNoteMs
+        smallMealNoteMs = therapy.smallMealNoteMs
+        if (MealKnownGate.armFromNote(preferences, dateUtil.now(), therapy.mealKnownStartMs)) {
+            consoleLog.add("🍽️ MEAL_KNOWN: armed by the eating note")
+        }
+
+        // 🩹 "This bolus is a correction": a "correction" note closes the meal window, and the bolus
+        // next to it (read just below) opens nothing. Before the bolus on purpose.
+        if (MealKnownGate.applyCorrectionNote(preferences, therapy.correctionNoteStartMs)) {
+            consoleLog.add("🩹 MEAL_KNOWN: closed by the correction note")
+            rT.reason.append("🩹 correction note: meal window closed ")
+        }
+
+        // 🍽️ The user's own prebolus is the meal declaration: no button, no carb count.
+        // Only opens the knowledge window (MealKnownGate). It never doses anything by itself.
+        MealKnownGate.armFromManualBolus(
+            preferences = preferences,
+            now = dateUtil.now(),
+            boluses = mealGateBoluses(dateUtil.now()),
+        )?.let { armed ->
+            consoleLog.add(
+                "🍽️ MEAL_KNOWN: armed by manual bolus ${"%.2f".format(Locale.US, armed.amount)}U " +
+                    "at bg=${bg.toInt()} delta=${"%.1f".format(Locale.US, delta)}"
+            )
+        }
+
+        // 🍛 Big meal (the "gros" note, or 4 U or more of the user's own bolus): it stays declared
+        // longer, and until its end the max IOB is the big meal max IOB. Before the
+        // basal schedule bootstrap on purpose: that is where `maxIob` becomes the tick's limit.
+        lastBigMealDecision = evaluateBigMeal(ctx)
+        if (lastBigMealDecision.release && lastBigMealDecision.raisedMaxIobU > maxIob) {
+            consoleLog.add("🍛 BIG_MEAL: MaxIob ${"%.1f".format(maxIob)}→${"%.1f".format(lastBigMealDecision.raisedMaxIobU)}")
+            maxIob = lastBigMealDecision.raisedMaxIobU
+        }
+
+        // 🥗 Small meal (the "petit" note): the whole meal stays under the small meal max IOB.
+        // After the big meal on purpose: the small meal wins.
+        smallMealActive = SmallMealGate.isActive(
+            MealKnownGate.msSinceArm(preferences, dateUtil.now())?.let { dateUtil.now() - it },
+            smallMealNoteMs,
+        )
+        if (smallMealActive && maxIob > SmallMealGate.MAX_IOB_U) {
+            consoleLog.add("🥗 SMALL_MEAL: MaxIob ${"%.1f".format(maxIob)}→${"%.1f".format(SmallMealGate.MAX_IOB_U)}")
+            maxIob = SmallMealGate.MAX_IOB_U
+        }
+
+        // Peak and trough since the meal was declared — the shape test of the second-rise gate.
+        if (MealKnownGate.msSinceArm(preferences, dateUtil.now()) != null) {
+            MealKnownGate.trackBg(preferences, bg, dateUtil.now())
+        }
+
+        // Second rise of the same meal. Worked out every tick, applied at the end of the tick
+        // (applySecondWaveIobCap).
+        lastSecondWaveVerdict = SecondWaveGate.evaluate(
+            preferences = preferences,
+            now = dateUtil.now(),
+            declaredCobG = ctx.mealData.mealCOB,
+            bgMgdl = bg,
+            mealBlocked = mealInterpretationBlocked(),
+        )
+
+        // Reported here and not at the end of the tick: a safety halt (LGS), a T3c bypass or the
+        // exercise lockout all return before that point, and those are exactly the ticks where the
+        // meal state is worth seeing. `rT.reason` is what reaches Nightscout.
+        consoleLog.add(MealConfirmationGate.statusLine(preferences, dateUtil.now()))
+        consoleLog.add(MealKnownGate.statusLine(preferences, dateUtil.now()))
+        rT.reason.append(MealConfirmationGate.statusLine(preferences, dateUtil.now())).append(" ")
+        rT.reason.append(MealKnownGate.statusLine(preferences, dateUtil.now())).append(" ")
+        if (lastSecondWaveVerdict.reason != "idle") {
+            consoleLog.add("🌊 SECOND_WAVE: ${lastSecondWaveVerdict.reason}")
+            rT.reason.append("🌊 ").append(lastSecondWaveVerdict.reason).append(" ")
+        }
         this.acceleratingUp = if (delta > 2 && delta - longAvgDelta > 2) 1 else 0
         this.decceleratingUp = if (delta > 0 && (delta < shortAvgDelta || delta < longAvgDelta)) 1 else 0
         this.acceleratingDown = if (delta < -2 && delta - longAvgDelta < -2) 1 else 0
@@ -3864,6 +3980,31 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         lastBolusTimeMs: Long?,
         nowMs: Long,
     ): MealAbsorptionPhaseEngine.Output {
+        // Not a meal on this tick: no meal phase at all. The phase is what opened FIRST_WAVE →
+        // MEAL_PRIORITY_CHAIN and the meal-mode basal boost.
+        // The memory and the hold are cleared too, so an old wave does not come back when a real
+        // meal is declared later.
+        if (mealInterpretationBlocked(nowMs)) {
+            MealAbsorptionMemory.reset()
+            MealAbsorptionPhaseHysteresis.reset()
+            val none = MealAbsorptionPhaseEngine.Output(
+                phase = MealAbsorptionPhase.NONE,
+                belief = 0.0,
+                reason = "meal_not_declared",
+                deltaMgdlPer5 = delta.toDouble(),
+                gapMgdl = 0.0,
+                bestTerminalMgdl = bg,
+                memoryActive = false,
+                waveCount = 0,
+                mealDeliveryPriority = false,
+                chronoPrior = 0.0,
+                kineticScore = 0.0,
+                trajectoryScore = 0.0,
+                physioScore = 0.0,
+            )
+            lastMealAbsorptionOutput = none
+            return none
+        }
         val scenario = lastScenarioProjection
         val floorT = scenario?.clinicalFloor?.terminalMgdl ?: bg
         val bestT = scenario?.scenarioBest?.terminalMgdl ?: bg
@@ -4062,6 +4203,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             inflammationRecovery = stressMask.inflammationRecovery,
             hormonalCircadian = stressMask.hormonalCircadian,
             cgmFirstSensorConfidence = preferences.get(BooleanKey.OApsAIMISensorConfidenceCgmFirst),
+            userDeclaredNoMeal = mealInterpretationBlocked(),
         )
         lastUamHypothesisState = hypothesisState
         lastPhysioLatentState = latentState
@@ -5896,7 +6038,9 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             hasRecentMealEstimate = hasRecentMealEstimate,
             minBgLookback75m = minBgInLastMinutes(AUTODRIVE_POST_HYPO_MIN_BG_LOOKBACK_MINUTES),
             estimatedRa = continuousStateEstimator.getLastRa(),
-            mealChannelHint = lastRbtAppliedHints?.mealChannel,
+            // No meal on this tick: the gate must not open on a meal-aware rise.
+            mealChannelHint = if (mealInterpretationBlocked()) MealChannelHint.SUPPRESS else lastRbtAppliedHints?.mealChannel,
+            reboundLookbackThresholdMgdl = autodriveReboundLookbackThreshold(profile),
         )
 
         // Observation only — recorded for both outcomes, before the branch. The engaged path already
@@ -6075,7 +6219,10 @@ class DetermineBasalaimiSMB2 @Inject constructor(
 
             val v3CommandSafe = adCommand != null && adCommand.isSafe
             val evidenceLimits = UndeclaredEvidenceCap.limits(
-                undeclared = !autodriveMealSignals && !fclTime && !anticipTime && !autodriveMealContext.declaredMealIntent,
+                // A meal declared by the user's own bolus or the eating note has no meal mode and no
+                // carbs: without the last term it was capped like a rise nobody declared.
+                undeclared = !autodriveMealSignals && !fclTime && !anticipTime && !autodriveMealContext.declaredMealIntent &&
+                    !MealKnownGate.isWithinDeclaredMeal(preferences, dateUtil.now()),
                 bgMgdl = bg,
                 belief = lastMealAbsorptionOutput?.belief,
                 riseLevel = riseConfirmation?.level,
@@ -7743,12 +7890,16 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             shortAvgDeltaMgdlPer5 = shortAvgDelta.toDouble(),
         )
 
+        // Red Carpet puts back what the safeties cut, in a meal. With no meal, only an explicit action
+        // or a meal mode may still ask for it.
+        val inferredMealAllowed = !mealInterpretationBlocked()
         val isRedCarpetSituation =
             isExplicitAction ||
                 anyMealModeForGuard ||
-                implicitMealCorrection.redCarpetEligible ||
-                isConfirmedHighRiseLocal ||
-                (isMealChaos && smbExecution.finalSmb > 0.5)
+                (inferredMealAllowed &&
+                    (implicitMealCorrection.redCarpetEligible ||
+                        isConfirmedHighRiseLocal ||
+                        (isMealChaos && smbExecution.finalSmb > 0.5)))
 
         val gatedUnits = smbToGiveLocal
         val proposedUnits = smbExecution.finalSmb.toFloat()
@@ -8921,6 +9072,10 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             minBg = bundle.profile.min_bg,
             lgsThreshold = HypoThresholdMath.getLgsThresholdSafe(bundle.profile),
             eventualBg = bundle.eventualBg,
+            // Same wiring as the SMB stacking layer, so the two hypo protections read one number.
+            minPredBg = minPredictedBgForRbtWiring(
+                authoritativeMinPredBg(bundle.rT, minPredictedAcrossCurves(bundle.rT.predBGs)),
+            ),
             iob = bundle.tickIobForEngine,
             maxIob = bundle.engineMaxIob,
             allowMealHighIob = bundle.allowMealHighIob,
@@ -12099,6 +12254,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             mealCertainty = lastMealCertainty,
             trunkGlobalState = lastPhysiologicalTreeSnapshot?.trunk?.globalState,
             mealConfirmedEarlyReleaseEnabled = preferences.get(BooleanKey.OApsAIMIMealConfirmedEarlyRelease),
+            mealDeclaredByUser = MealKnownGate.isMealKnown(preferences, dateUtil.now()),
             // The smoothed combined delta, not the raw 5-minute one. The parameter has always been
             // named for the combined signal; passing the raw delta let a single sensor step of +24
             // satisfy the "rising" test and clear the "falling" breaker on the same tick.
@@ -12369,6 +12525,18 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     private var decceleratingDown: Int = 0
     private var stable: Int = 0
     private var maxIob = 0.0
+
+    /** Newest "gros" note (big meal button), read with the other notes. See [BigMealGate]. */
+    private var bigMealNoteMs = 0L
+
+    /** Newest "petit" note (small meal button), read with the other notes. See [SmallMealGate]. */
+    private var smallMealNoteMs = 0L
+
+    /** True on this tick when the declared meal is a small one. See [SmallMealGate]. */
+    private var smallMealActive = false
+
+    /** Big meal state of this tick, worked out before the max IOB is used. See [evaluateBigMeal]. */
+    private var lastBigMealDecision = BigMealGate.Decision.INACTIVE
     private var maxSMB = 0.5
     private var maxSMBHB = 0.5
     private var lastBolusSMBUnit = 0.0f
@@ -12500,13 +12668,18 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         ).also { lastCoffeeVerdict = it }
     }
 
-    /** A meal is declared now: a meal mode is active, or a meal note is younger than 3 h (4 h high-carb). */
+    /**
+     * A meal is declared now: a meal mode is active, or a meal note is younger than 3 h (4 h high-carb),
+     * or the meal window of [MealKnownGate] is open (a manual meal bolus or the eating note, 3 h).
+     * The user who declares meals that way uses no meal mode, and their meals must keep the same
+     * exemption as a meal mode.
+     */
     private fun declaredMealWindowActive(): Boolean = DynamicBasalStackCap.declaredMealActive(
         anyMealModeActive = mealTime || bfastTime || lunchTime || dinnerTime || highCarbTime || snackTime ||
             fclTime || anticipTime,
         lastDeclaredMealAgeMin = lastDeclaredMeal?.ageMin,
         lastDeclaredMealHighCarb = lastDeclaredMeal?.highCarb == true,
-    )
+    ) || MealKnownGate.isMealKnown(preferences, dateUtil.now())
 
     /** ISF for the stack cap: the dose ISF when known, else the variable sensitivity. */
     private fun stackCapIsf(): Double? =
@@ -12819,6 +12992,10 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     private var lastEffortMemoryShadow = EffortActivityBelief.Memory()
     /** Absolute context SMB ceiling (SlowCarbMeal); enforced robustly at [finalizeAndCapSMB]. Per-tick. */
     private var lastContextSmbCeilingU: Double? = null
+
+    /** Second-wave verdict of this tick. See [SecondWaveGate]. */
+    private var lastSecondWaveVerdict: SecondWaveGate.Verdict = SecondWaveGate.Verdict.INACTIVE
+
     /** Hard context SMB-off (HypoRecovery); enforced robustly at [finalizeAndCapSMB]. Per-tick. */
     private var lastContextSuppressSmb: Boolean = false
     /** Cumulative context-SMB budget for a SlowCarbMeal early window (anti-overshoot, Q5). Cross-tick. */
@@ -13789,6 +13966,19 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             }
         }
         return finalRateUph
+    }
+
+    /**
+     * Post-hypo line for the V3 engage gate. When no meal is declared, a rise after a dip is treated
+     * as a rescue up to the LGS threshold, not only below the old 75. On a two-week field log, rises
+     * after a dip between 75 and the LGS line got much more insulin than the rises already held back,
+     * and they were the ones that fell back into a low. A declared meal (eating note or manual bolus)
+     * keeps the old line.
+     */
+    private fun autodriveReboundLookbackThreshold(profile: OapsProfileAimi): Double {
+        val base = CorrectionAggressionGate.REBOUND_MIN_BG_LOOKBACK_MGDL
+        if (MealKnownGate.isMealKnown(preferences, dateUtil.now())) return base
+        return max(base, profile.lgsThreshold?.toDouble() ?: base)
     }
 
     private fun evaluateAndLogCorrectionAggression(
@@ -15546,9 +15736,11 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         // Helper interne pour vérifier AIMI Context (RContext) - supposer true si mealData indique un repas récent
         // Dans une implémentation idéale, on injecterait le ContextRepository, mais ici on utilise les proxies disponibles
         // 🐛 FIX: 'mealData.isMealStart' n'existe pas. On utilise la variable locale 'isMealActive' calculée plus haut.
-        val isAimiContextMeal = !isExplicitUserAction && mealCorrectionContext.redCarpetEligible
+        val inferredMealAllowed = !mealInterpretationBlocked()
+        val isAimiContextMeal = !isExplicitUserAction && inferredMealAllowed && mealCorrectionContext.redCarpetEligible
 
-        val isRedCarpetSituation = isExplicitUserAction || isMealModeCondition() || isAimiContextMeal || ((isMealChaos || isMealActive) && proposedUnits > 0.5f)
+        val isRedCarpetSituation = isExplicitUserAction || isMealModeCondition() || isAimiContextMeal ||
+            (inferredMealAllowed && (isMealChaos || isMealActive) && proposedUnits > 0.5f)
 
         // On entre dans la logique forcée si on est en situation "Red Carpet" et qu'il y a une demande
         if (isRedCarpetSituation && proposedUnits > 0.0 && !iobSurveillanceSuppressRedCarpet) {
@@ -18738,7 +18930,10 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         if (a.posture != EffortActivityBelief.Posture.EXERTION) return false
         if (a.state != EffortActivityBelief.State.ACTIVE && a.state != EffortActivityBelief.State.RECENT_EFFORT) return false
         if (a.confidence < EFFORT_MEAL_SUPPRESS_CONF) return false
-        val declaredMeal = mealTime || bfastTime || lunchTime || dinnerTime || snackTime || highCarbTime
+        // A meal known through MealKnownGate counts here too: the user declared it with their own
+        // bolus or with the eating note, without paying for a meal mode.
+        val declaredMeal = mealTime || bfastTime || lunchTime || dinnerTime || snackTime || highCarbTime ||
+            MealKnownGate.isMealKnown(preferences, dateUtil.now())
         return !declaredMeal && cob.toDouble() < EFFORT_MEAL_SUPPRESS_MAX_COB_G
     }
 
@@ -18897,6 +19092,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 cfrdExacerbationActive = cfrdExacerbationActive,
                 hrInflammationElevated = hrInflammationElevated,
                 maxGramsPref = preferences.get(DoubleKey.OApsAIMIUndeclaredCobMaxG),
+                userDeclaredNoMeal = mealInterpretationBlocked(),
             )
         )
         consoleLog.add("🍽️ VIRTUAL_COB: ${result.toLogString()}")
@@ -19229,6 +19425,9 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         // branch or the basal merge exports nothing instead of the previous tick's numbers.
         mealBoostCapRecord = null
         basalMergeRecord = null
+        // Reset before any early return can leave the previous tick's verdict in place.
+        lastSecondWaveVerdict = SecondWaveGate.Verdict.INACTIVE
+        lastBigMealDecision = BigMealGate.Decision.INACTIVE
         val (
             originalProfile,
             isExplicitAdvisorRun,
@@ -20105,9 +20304,268 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 }
             },
         ) {
-            AimiDetermineBasalTickOrchestrator.run(this, ctx)
+            AimiDetermineBasalTickOrchestrator.run(this, ctx).also {
+                applyMealDeniedBasalCap(it, ctx)
+                applyBolusEarlyCap(it, ctx)
+                applyBigMealPush(it, ctx)
+                applySecondWaveIobCap(it, ctx)
+                applySmallMealIobCap(it, ctx)
+                reportBigMeal(it)
+            }
         }
     }
+
+    /**
+     * No meal on this tick (the user declares every meal and declared none): take the meal
+     * treatment out of the basal as well.
+     *
+     * Placed on the tick result, after every path has written its rate, because no single basal
+     * path is to blame: V3, the meal-mode boost, the trajectory bridge and the dynamic controller
+     * all reached the max basal on their own. A cap inside one of them would leave the others open.
+     * See [MealConfirmationGate.deniedBasalCeilingUph].
+     */
+    private fun applyMealDeniedBasalCap(result: RT, ctx: AimiTickContext) {
+        if (!mealInterpretationBlocked()) return
+        // No new rate on this tick means the running temp basal goes on. It can be a meal-sized
+        // temp set while the meal was still declared, so it is checked like a new one.
+        val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
+        val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp } ?: return
+        val profile = ctx.profile
+        val bgNow = ctx.glucoseStatus.glucose
+        if (!bgNow.isFinite() || !profile.current_basal.isFinite()) return
+        // Same limit as setTempBasal when no meal bypass is active.
+        val normalMax = min(
+            profile.max_basal,
+            min(
+                profile.max_daily_safety_multiplier * profile.max_daily_basal,
+                profile.current_basal_safety_multiplier * profile.current_basal
+            )
+        )
+        val ceiling = MealConfirmationGate.deniedBasalCeilingUph(
+            bgNow,
+            profile.current_basal,
+            normalMax,
+            MealConfirmationGate.elevatedBasalFactor(preferences),
+        )
+        if (rate <= ceiling) return
+        val stuckHigh = MealConfirmationGate.isStuckNightHigh(
+            bgNow,
+            ctx.glucoseStatus.shortAvgDelta,
+            ctx.glucoseStatus.longAvgDelta,
+            ctx.iobDataArray.firstOrNull()?.iob ?: 0.0,
+            ctx.currentTime,
+        )
+        if (stuckHigh) {
+            if (rate <= normalMax) {
+                result.reason.append(" [STUCK_NIGHT_HIGH no cap ${"%.2f".format(rate)}U/h (BG ${"%.0f".format(bgNow)})]")
+                return
+            }
+            result.rate = normalMax
+            if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
+            result.reason.append(" [STUCK_NIGHT_HIGH ${"%.2f".format(rate)}→${"%.2f".format(normalMax)}U/h (BG ${"%.0f".format(bgNow)})]")
+            return
+        }
+        result.rate = ceiling
+        if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
+        val line = "MEAL_DENIED_BASAL_CAP ${"%.2f".format(rate)}→${"%.2f".format(ceiling)}U/h (BG ${"%.0f".format(bgNow)})"
+        consoleLog.add("🙅 $line")
+        result.reason.append(" [$line]")
+    }
+
+    /**
+     * A second wave of any declared meal, with 6 U or more on board, whatever the glucose: no SMB
+     * and nothing above the scheduled basal. After [applyBigMealPush], so that it wins over it. See
+     * [SecondWaveGate.IOB_CAP_U]. Below the cap the second wave is dosed as usual, from its first
+     * tick: the brake is on stacking, not on a hesitating curve.
+     */
+    private fun applySecondWaveIobCap(result: RT, ctx: AimiTickContext) {
+        val iob = ctx.iobDataArray.firstOrNull()?.iob ?: return
+        if (!SecondWaveGate.iobCapped(lastSecondWaveVerdict, iob)) return
+        val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
+        val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp }
+        val scheduled = ctx.profile.current_basal
+        val smb = result.units ?: 0.0
+        val basalOver = rate != null && scheduled.isFinite() && rate > scheduled
+        if (smb <= 0.0 && !basalOver) return
+        if (smb > 0.0) result.units = 0.0
+        if (basalOver) {
+            result.rate = scheduled
+            if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
+        }
+        val line = "SECOND_WAVE_IOB_CAP IOB ${"%.2f".format(iob)}≥${"%.0f".format(SecondWaveGate.IOB_CAP_U)}" +
+            (if (smb > 0.0) " SMB ${"%.2f".format(smb)}→0" else "") +
+            (if (basalOver) " basal ${"%.2f".format(rate)}→${"%.2f".format(scheduled)}U/h" else "")
+        consoleLog.add("🌊 $line")
+        result.reason.append(" [$line]")
+    }
+
+    /**
+     * Small meal ("petit" note): IOB + SMB stays under [SmallMealGate.MAX_IOB_U] for the whole meal,
+     * and the basal goes back to the scheduled rate once the limit is reached. On the tick result,
+     * after the big meal push and the second wave cap, so that it wins over both.
+     */
+    private fun applySmallMealIobCap(result: RT, ctx: AimiTickContext) {
+        if (!smallMealActive) return
+        val iob = ctx.iobDataArray.firstOrNull()?.iob ?: return
+        val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
+        val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp }
+        val scheduled = ctx.profile.current_basal
+        val smb = result.units ?: 0.0
+        val allowedSmb = SmallMealGate.allowedSmbU(smb, iob)
+        val smbCut = smb > 0.0 && allowedSmb < smb
+        val basalOver = SmallMealGate.basalCapped(iob) && rate != null && scheduled.isFinite() && rate > scheduled
+        if (!smbCut && !basalOver) {
+            result.reason.append(" 🥗 small meal: max IOB ${"%.0f".format(SmallMealGate.MAX_IOB_U)}")
+            return
+        }
+        if (smbCut) result.units = allowedSmb
+        if (basalOver) {
+            result.rate = scheduled
+            if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
+        }
+        val line = "SMALL_MEAL_IOB_CAP IOB ${"%.2f".format(iob)}/${"%.0f".format(SmallMealGate.MAX_IOB_U)}" +
+            (if (smbCut) " SMB ${"%.2f".format(smb)}→${"%.2f".format(allowedSmb)}" else "") +
+            (if (basalOver) " basal ${"%.2f".format(rate)}→${"%.2f".format(scheduled)}U/h" else "")
+        consoleLog.add("🥗 $line")
+        result.reason.append(" [$line]")
+    }
+
+    /**
+     * The first 30 minutes after the user's own meal bolus: at most 1 U of SMB on top of it, and no
+     * basal above the scheduled rate. See [BolusEarlyCapGate].
+     *
+     * On the tick result, after every path has written its dose, for the same reason as
+     * [applyMealDeniedBasalCap].
+     */
+    private fun applyBolusEarlyCap(result: RT, ctx: AimiTickContext) {
+        val now = dateUtil.now()
+        val bolusAt = MealKnownGate.bolusAtMs(preferences)
+        if (bolusAt <= 0L) return
+        val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
+        val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp }
+        val smb = result.units ?: 0.0
+        val smbSince = mealGateBoluses(now)
+            .filter { it.isValid && it.type == BS.Type.SMB && it.timestamp > bolusAt }
+            .sumOf { it.amount }
+        val decision = BolusEarlyCapGate.evaluate(
+            now = now,
+            bolusAtMs = bolusAt,
+            mealKnown = MealKnownGate.isMealKnown(preferences, now),
+            smbSinceBolusU = smbSince,
+            proposedSmbU = smb,
+            proposedRateUph = rate,
+            scheduledUph = ctx.profile.current_basal,
+        )
+        if (!decision.active) return
+        val status = "⏱️ bolus-early t+${decision.minutesSinceBolus}min SMB ${"%.2f".format(decision.smbSpentU)}/${"%.1f".format(BolusEarlyCapGate.SMB_BUDGET_U)}U"
+        consoleLog.add(status)
+        result.reason.append(" $status")
+        if (!decision.cuts(smb, rate)) return
+        val smbCut = decision.smbAllowedU < smb
+        val allowedRate = decision.rateAllowedUph
+        val rateCut = rate != null && allowedRate != null && allowedRate < rate
+        if (smbCut) result.units = decision.smbAllowedU
+        if (rateCut) {
+            result.rate = allowedRate
+            if (keepsRunningTemp || (result.duration ?: 0) <= 0) result.duration = 30
+        }
+        val line = "BOLUS_EARLY_CAP" +
+            (if (smbCut) " SMB ${"%.2f".format(smb)}→${"%.2f".format(decision.smbAllowedU)}" else "") +
+            (if (rateCut) " basal ${"%.2f".format(rate)}→${"%.2f".format(allowedRate)}U/h" else "")
+        consoleLog.add("⏱️ $line")
+        result.reason.append(" [$line]")
+    }
+
+    /**
+     * A big meal announced by the "gros" note or a bolus of 4 U or more: marks it big (it stays
+     * declared for the big meal duration), gives the big meal max IOB until its end, and tells
+     * whether glucose is going up. Called once per tick, before the max IOB is used. See [BigMealGate].
+     */
+    private fun evaluateBigMeal(ctx: AimiTickContext): BigMealGate.Decision {
+        val now = dateUtil.now()
+        val elapsed = MealKnownGate.msSinceArm(preferences, now) ?: return BigMealGate.Decision.INACTIVE
+        val armedAt = now - elapsed
+        val boluses = mealGateBoluses(now)
+            .filter { it.isValid && it.type == BS.Type.NORMAL }
+            .map { it.timestamp to it.amount }
+        val bolusU = BigMealGate.mealBolusU(armedAt, now, boluses)
+        if (bolusU < BigMealGate.BIG_BOLUS_U && bigMealNoteMs < armedAt - BigMealGate.BOLUS_BEFORE_ARM_MIN * 60_000L) {
+            return BigMealGate.Decision.INACTIVE
+        }
+        if (MealKnownGate.markBigMeal(preferences)) {
+            consoleLog.add("🍛 BIG_MEAL: meal marked big, declared for ${MealKnownGate.bigMealHorizonMin(preferences)}min")
+        }
+        // From the declaration: the shape of the meal tells the first wave from the second.
+        val from = min(armedAt, now - (BigMealGate.RISE_WINDOW_MIN + 10L) * 60_000L)
+        val readings = (iobCobCalculator.ads.getBucketedDataTableCopy() ?: return BigMealGate.Decision.INACTIVE)
+            .filter { !it.filledGap && it.timestamp >= from }
+            .map { BigMealGate.Reading(it.timestamp, it.recalculated) }
+        return BigMealGate.evaluate(
+            now = now,
+            armedAtMs = armedAt,
+            bolusU = bolusU,
+            readings = readings,
+            iobU = ctx.iobDataArray.firstOrNull()?.iob ?: return BigMealGate.Decision.INACTIVE,
+            maxIobU = maxIob,
+            bigMealMaxIobU = preferences.get(DoubleKey.OApsAIMIBigMealMaxIob),
+            horizonMin = MealKnownGate.bigMealHorizonMin(preferences),
+            bigMealNoteMs = bigMealNoteMs,
+        )
+    }
+
+    /**
+     * A big meal going up: the big meal SMB (up to the big meal max IOB) and the max basal, whatever
+     * the paths gave. On the tick result, so that it wins over [applyBolusEarlyCap]. It never lowers a dose,
+     * and stops on the first tick where glucose is flat or falls. See [BigMealGate].
+     */
+    private fun applyBigMealPush(result: RT, ctx: AimiTickContext) {
+        val decision = lastBigMealDecision
+        if (!decision.push) return
+        val bgNow = ctx.glucoseStatus.glucose
+        val lgs = ctx.profile.lgsThreshold?.toDouble() ?: 70.0
+        if (!bgNow.isFinite() || bgNow < max(lgs, BigMealGate.PUSH_MIN_BG_MGDL)) return
+        val iob = ctx.iobDataArray.firstOrNull()?.iob ?: return
+        val keepsRunningTemp = result.rate == null && ctx.currentTemp.duration > 0
+        val rate = result.rate ?: ctx.currentTemp.rate.takeIf { keepsRunningTemp } ?: 0.0
+        val smb = result.units ?: 0.0
+        // First wave: up to the big meal max IOB. Second wave: up to a lower limit only.
+        val room = min(decision.raisedMaxIobU, decision.pushMaxIobU) - iob
+        if (room <= 0.0) return
+        val smbTarget = if (ctx.microBolusAllowed && room > 0.0) {
+            floor(min(preferences.get(DoubleKey.OApsAIMIBigMealMaxSmb), room) * 20.0) / 20.0
+        } else 0.0
+        val maxRate = ctx.profile.max_basal
+        val smbUp = smbTarget > smb
+        // Half an hour of max basal is about half a unit more on board: not when the room is smaller.
+        val rateUp = maxRate.isFinite() && maxRate > rate && room >= 0.5
+        if (!smbUp && !rateUp) return
+        if (smbUp) result.units = smbTarget
+        if (rateUp) {
+            result.rate = maxRate
+            result.duration = 30
+        }
+        val line = "BIG_MEAL_PUSH" +
+            (if (smbUp) " SMB ${"%.2f".format(smb)}→${"%.2f".format(smbTarget)}" else "") +
+            (if (rateUp) " basal ${"%.2f".format(rate)}→${"%.2f".format(maxRate)}U/h" else "")
+        consoleLog.add("🍛 $line")
+        result.reason.append(" [$line]")
+    }
+
+    /** Writes the big meal state of this tick in the reason. See [evaluateBigMeal]. */
+    private fun reportBigMeal(result: RT) {
+        val decision = lastBigMealDecision
+        if (!decision.bigMeal) return
+        val head = "🍛 big-meal ${if (decision.byNote) "note " else ""}${if (decision.secondWave) "2nd-wave push<=${"%.1f".format(decision.pushMaxIobU)}U " else ""}bolus ${"%.1f".format(decision.bolusU)}U t+${decision.minutesSinceArm}min"
+        val line = "$head BG ${"%.0f".format(decision.bgMgdl)} ${"%+.0f".format(decision.riseMgdl)}/${BigMealGate.RISE_WINDOW_MIN}min " +
+            "IOB ${"%.2f".format(decision.iobU)} ${if (decision.push) "pushing" else "not rising"}" +
+            (if (decision.release) " [BIG_MEAL MaxIob ${"%.1f".format(decision.maxIobU)}→${"%.1f".format(decision.raisedMaxIobU)}]" else "")
+        consoleLog.add(line)
+        result.reason.append(" $line")
+    }
+
+    /** See [MealConfirmationGate.isMealInterpretationBlocked]. */
+    private fun mealInterpretationBlocked(now: Long = dateUtil.now()): Boolean =
+        MealConfirmationGate.isMealInterpretationBlocked(preferences, now)
 
     private fun inferFinalLoopDecisionFromResult(result: RT): String {
         val units = result.units ?: 0.0
@@ -20527,6 +20985,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     }
 
     private fun inferredMealSafetyIntent(): Boolean {
+        if (mealInterpretationBlocked()) return false
         val postHypo = lastPostHypoDeliveryAuthority
         if (postHypo.active && postHypo.forceMealInterpretationSuppressed) return false
         // 🏃 Effort / post-effort adrenaline rise is not a meal (undeclared context only).

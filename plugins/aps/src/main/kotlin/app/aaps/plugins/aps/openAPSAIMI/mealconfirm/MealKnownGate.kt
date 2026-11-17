@@ -1,0 +1,361 @@
+package app.aaps.plugins.aps.openAPSAIMI.mealconfirm
+
+import app.aaps.core.data.model.BS
+import app.aaps.core.keys.IntKey
+import app.aaps.core.keys.interfaces.Preferences
+import app.aaps.plugins.aps.openAPSAIMI.keys.AimiLongKey
+import kotlin.math.max
+
+/**
+ * "A meal is running" — kept apart from the meal modes.
+ *
+ * AIMI already has meal modes (`mealTime`, `lunchTime`, `dinnerTime`, and so on). They are the only
+ * way to make `declaredMeal` true, but they also send a fixed prebolus, raise the SMB ceiling to
+ * `maxSMBHB` and raise the basal cap to `meal_modes_max_basal`. Knowing about a meal and dosing
+ * hard for one are tied together, so a user who wants the first must accept the second. Some users
+ * then declare nothing at all, which is worse for everyone.
+ *
+ * This gate carries **only the knowledge**. It never delivers insulin, never changes a ceiling and
+ * never raises a cap. Other code can ask "is a meal already running?" without paying for a mode.
+ *
+ * Two things arm it, and neither asks the user for a number:
+ *  - a **manual bolus**, at any glucose: the user's own prebolus is the declaration;
+ *  - a note holding "eating", written by an AAPS Automation: the light meal button.
+ *
+ * A bolus is a meal unless the user says otherwise with the "correction" note
+ * ([applyCorrectionNote]). Glucose does not decide it: a meal can start high, and a bolus given at
+ * 181 mg/dL right before dinner, in a field log, was once read as a correction and the whole
+ * dinner got no meal treatment at all.
+ */
+object MealKnownGate {
+
+    /**
+     * How long a meal stays "known" after it was declared — the **active** phase.
+     *
+     * This is what raises dosing authority (the early-release margin of `DecisionPredictionAuthority`)
+     * and what counts as a declared meal against the effort guard. It stays at three hours on
+     * purpose: nobody wants the loop still front-loading six hours after lunch.
+     */
+    const val MEAL_WINDOW_MIN = 180L
+
+    /**
+     * How long the meal's own clock is followed — much longer than the active phase. A slow meal
+     * can still bring a new rise five or six hours after its start, and a meal that is still
+     * arriving is not a new meal. Nothing here raises a dose: it bounds the second-wave tracking
+     * ([SecondWaveGate.MAX_ELAPSED_MIN]).
+     */
+    const val MEAL_TAIL_MIN = 360L
+
+    /** Under this, a manual bolus is not read as a meal. SMBs are already left out by type. */
+    const val MANUAL_BOLUS_MEAL_THRESHOLD_U = 0.5
+
+    private const val MIN_MS = 60_000L
+
+    /**
+     * How long a declaration covers a meal when the user declares every meal
+     * (`MealConfirmationGate.isMealInterpretationBlocked`).
+     *
+     * Longer than [MEAL_WINDOW_MIN] on purpose: the waves of a slow meal come after 3 h. In a field
+     * log a pasta meal rose again at t+2.5 h and t+3.7 h. Shorter than [MEAL_TAIL_MIN] on purpose
+     * too: in the same log two rises with no food behind them came at about t+4.4 h (one of them the
+     * rise after rescue sugar), and both were dosed like a meal.
+     */
+    const val DECLARED_MEAL_HORIZON_MIN = 240L
+
+    /**
+     * The horizon actually in force: [IntKey.OApsAIMIDeclaredMealHorizonMin], so the user can tune
+     * it without a rebuild, or [bigMealHorizonMin] for a big meal ([isBigMeal]). No single value
+     * fits every meal: in a field log a quick lunch was over at t+3 h and the loop dosed a small
+     * rise at t+3h30 into a low, while a pasta dinner was still arriving at t+3h40. A value outside
+     * the key's own range falls back to [DECLARED_MEAL_HORIZON_MIN].
+     */
+    fun declaredMealHorizonMin(preferences: Preferences): Long {
+        if (isBigMeal(preferences)) return bigMealHorizonMin(preferences)
+        val key = IntKey.OApsAIMIDeclaredMealHorizonMin
+        val value = preferences.get(key)
+        return if (value in key.min..key.max) value.toLong() else DECLARED_MEAL_HORIZON_MIN
+    }
+
+    /** Default of [IntKey.OApsAIMIBigMealHorizonMin]: fat and bread can still arrive at t+5 h. */
+    const val BIG_MEAL_HORIZON_MIN = 360L
+
+    /**
+     * The active phase of a big meal ends this long before its horizon, as the normal 3 h active
+     * phase ends 1 h before the normal 4 h horizon.
+     */
+    const val BIG_MEAL_ACTIVE_BEFORE_END_MIN = 60L
+
+    /** How long a big meal stays declared: [IntKey.OApsAIMIBigMealHorizonMin]. */
+    fun bigMealHorizonMin(preferences: Preferences): Long {
+        val key = IntKey.OApsAIMIBigMealHorizonMin
+        val value = preferences.get(key)
+        return if (value in key.min..key.max) value.toLong() else BIG_MEAL_HORIZON_MIN
+    }
+
+    /** True when the meal running now was marked big by [markBigMeal]. */
+    fun isBigMeal(preferences: Preferences): Boolean {
+        val armedAt = preferences.get(AimiLongKey.MealKnownArmedAt)
+        return armedAt > 0L && preferences.get(AimiLongKey.MealKnownBigMealAt) == armedAt
+    }
+
+    /**
+     * Marks the meal running now as big (big meal note, or 4 U or more of the user's own bolus,
+     * see `BigMealGate`): it stays declared for [bigMealHorizonMin], and its active phase
+     * ([isMealKnown]) runs until [BIG_MEAL_ACTIVE_BEFORE_END_MIN] before that. A new meal ([arm])
+     * starts as a normal meal again.
+     *
+     * @return true when this call marked the meal, false when there is no meal or it was big already.
+     */
+    fun markBigMeal(preferences: Preferences): Boolean {
+        val armedAt = preferences.get(AimiLongKey.MealKnownArmedAt)
+        if (armedAt <= 0L || isBigMeal(preferences)) return false
+        preferences.put(AimiLongKey.MealKnownBigMealAt, armedAt)
+        val activeMin = max(MEAL_WINDOW_MIN, bigMealHorizonMin(preferences) - BIG_MEAL_ACTIVE_BEFORE_END_MIN)
+        val until = armedAt + activeMin * MIN_MS
+        if (until > preferences.get(AimiLongKey.MealKnownUntil)) preferences.put(AimiLongKey.MealKnownUntil, until)
+        return true
+    }
+
+    /** True within [declaredMealHorizonMin] of the last declaration. */
+    fun isWithinDeclaredMeal(preferences: Preferences, now: Long): Boolean {
+        val elapsed = msSinceArm(preferences, now) ?: return false
+        return elapsed < declaredMealHorizonMin(preferences) * MIN_MS
+    }
+
+    /**
+     * A manual bolus this close to a "correction" note, before or after it, never opens the meal
+     * window. The user may press the button first and bolus next, or the other way round.
+     */
+    const val CORRECTION_SHIELD_MIN = 30L
+
+    /** True while a declared meal is still seen as running. */
+    fun isMealKnown(preferences: Preferences, now: Long): Boolean =
+        now < preferences.get(AimiLongKey.MealKnownUntil)
+
+    /** Minutes left in the meal window, 0 when no meal is known. */
+    fun remainingMinutes(preferences: Preferences, now: Long): Long {
+        val until = preferences.get(AimiLongKey.MealKnownUntil)
+        return if (now < until) (until - now + MIN_MS - 1) / MIN_MS else 0L
+    }
+
+    /**
+     * Milliseconds since the window was opened, **even after the window itself has closed**.
+     *
+     * [isMealKnown] stops at [MEAL_WINDOW_MIN], because "is a meal running?" is a 3 h question.
+     * The second rise of a slow meal is not: it can run to t+5h. Callers that follow the meal's
+     * own clock use this and set their own horizon.
+     */
+    fun msSinceArm(preferences: Preferences, now: Long): Long? {
+        val armedAt = preferences.get(AimiLongKey.MealKnownArmedAt)
+        return if (armedAt > 0L && now >= armedAt) now - armedAt else null
+    }
+
+    /**
+     * Time of the manual bolus that opened the meal window, or 0. An eating note pressed after the
+     * bolus keeps it: the bolus is still acting. A "correction" note clears it with the window.
+     */
+    fun bolusAtMs(preferences: Preferences): Long = preferences.get(AimiLongKey.MealKnownBolusAt)
+
+    /** Opens, or restarts, the meal window. A later meal always wins over an earlier one. */
+    fun arm(preferences: Preferences, now: Long) {
+        preferences.put(AimiLongKey.MealKnownUntil, now + MEAL_WINDOW_MIN * MIN_MS)
+        preferences.put(AimiLongKey.MealKnownArmedAt, now)
+        // A new meal starts a new glucose history; [trackBg] fills it from the next tick.
+        resetBgShape(preferences)
+    }
+
+    /**
+     * Where glucose started, how high the meal took it, and how low it came back since.
+     *
+     * @param lateTroughMgdl lowest glucose from [SecondWaveGate.MIN_ELAPSED_MIN] after the
+     * declaration, 0 when nothing was recorded there yet.
+     * @param lateWave a late rise was seen on this meal, see [SecondWaveGate.lateRise].
+     */
+    data class BgShape(
+        val startMgdl: Double,
+        val peakMgdl: Double,
+        val troughMgdl: Double,
+        val lateTroughMgdl: Double = 0.0,
+        val lateWave: Boolean = false,
+    )
+
+    /**
+     * Follows the glucose of the meal. Called once per tick while a meal is declared.
+     *
+     * This is what tells a second rise from the first wave, and from a meal that simply never came
+     * down: a second rise goes peak → trough → up again. A new peak restarts the trough, so a real
+     * wave that climbs past the first one is back to "first wave" for [SecondWaveGate].
+     *
+     * @param now the time of the tick. It dates the late trough and the late rise ([trackLateRise]);
+     * with 0 only the peak and the trough are followed.
+     */
+    fun trackBg(preferences: Preferences, bgMgdl: Double, now: Long = 0L) {
+        if (!bgMgdl.isFinite() || bgMgdl <= 0.0) return
+        val value = bgMgdl.toLong()
+        trackLateRise(preferences, value, now)
+        if (preferences.get(AimiLongKey.MealKnownBgStartMgdl) <= 0L) {
+            preferences.put(AimiLongKey.MealKnownBgStartMgdl, value)
+            preferences.put(AimiLongKey.MealKnownBgPeakMgdl, value)
+            preferences.put(AimiLongKey.MealKnownBgTroughMgdl, value)
+            return
+        }
+        val start = preferences.get(AimiLongKey.MealKnownBgStartMgdl).toDouble()
+        val peak = preferences.get(AimiLongKey.MealKnownBgPeakMgdl)
+        val trough = preferences.get(AimiLongKey.MealKnownBgTroughMgdl)
+        if (value > peak) {
+            // Once the first wave has come down, the shape is kept: a second wave climbing above the
+            // first peak is still a second wave (it used to wipe the trough and free the second-rise
+            // rules exactly when the rise was strongest).
+            if (SecondWaveGate.firstWaveCameDown(start, peak.toDouble(), trough.toDouble())) return
+            preferences.put(AimiLongKey.MealKnownBgPeakMgdl, value)
+            preferences.put(AimiLongKey.MealKnownBgTroughMgdl, value)
+        } else if (value < preferences.get(AimiLongKey.MealKnownBgTroughMgdl)) {
+            preferences.put(AimiLongKey.MealKnownBgTroughMgdl, value)
+        }
+    }
+
+    /**
+     * Follows the lowest glucose from [SecondWaveGate.MIN_ELAPSED_MIN] after the declaration, and
+     * remembers the first tick where glucose stood far enough above it late in the meal
+     * ([SecondWaveGate.lateRise]). Unlike the peak and the trough above, this one does not depend on
+     * the height of the first wave, and a new peak does not wipe it. Once seen, the late rise stays
+     * seen until the next declaration.
+     */
+    private fun trackLateRise(preferences: Preferences, value: Long, now: Long) {
+        val elapsedMin = (msSinceArm(preferences, now) ?: return) / MIN_MS
+        if (elapsedMin < SecondWaveGate.MIN_ELAPSED_MIN || elapsedMin > SecondWaveGate.MAX_ELAPSED_MIN) return
+        val lateTrough = preferences.get(AimiLongKey.MealKnownBgLateTroughMgdl)
+        if (lateTrough <= 0L || value < lateTrough) {
+            preferences.put(AimiLongKey.MealKnownBgLateTroughMgdl, value)
+            return
+        }
+        if (preferences.get(AimiLongKey.MealKnownLateWaveAt) > 0L) return
+        if (SecondWaveGate.lateRise(elapsedMin, value.toDouble(), lateTrough.toDouble())) {
+            preferences.put(AimiLongKey.MealKnownLateWaveAt, now)
+        }
+    }
+
+    /** The glucose of the current meal so far, or null when nothing was recorded yet. */
+    fun bgShape(preferences: Preferences): BgShape? {
+        val start = preferences.get(AimiLongKey.MealKnownBgStartMgdl)
+        if (start <= 0L) return null
+        return BgShape(
+            startMgdl = start.toDouble(),
+            peakMgdl = preferences.get(AimiLongKey.MealKnownBgPeakMgdl).toDouble(),
+            troughMgdl = preferences.get(AimiLongKey.MealKnownBgTroughMgdl).toDouble(),
+            lateTroughMgdl = preferences.get(AimiLongKey.MealKnownBgLateTroughMgdl).toDouble(),
+            lateWave = preferences.get(AimiLongKey.MealKnownLateWaveAt) > 0L,
+        )
+    }
+
+    private fun resetBgShape(preferences: Preferences) {
+        preferences.put(AimiLongKey.MealKnownBgStartMgdl, 0L)
+        preferences.put(AimiLongKey.MealKnownBgPeakMgdl, 0L)
+        preferences.put(AimiLongKey.MealKnownBgTroughMgdl, 0L)
+        preferences.put(AimiLongKey.MealKnownBgLateTroughMgdl, 0L)
+        preferences.put(AimiLongKey.MealKnownLateWaveAt, 0L)
+    }
+
+    /** Closes the window: the "correction" note, see [applyCorrectionNote]. */
+    fun clear(preferences: Preferences) {
+        preferences.put(AimiLongKey.MealKnownUntil, 0L)
+        preferences.put(AimiLongKey.MealKnownArmedAt, 0L)
+        preferences.put(AimiLongKey.MealKnownBolusAt, 0L)
+        resetBgShape(preferences)
+    }
+
+    /**
+     * Reads the user's own gesture. A manual bolus that is big enough opens the meal window with
+     * nothing else to do, unless a "correction" note sits next to it ([isShieldedByCorrectionNote]).
+     *
+     * Only [BS.Type.NORMAL] counts, because an SMB is the loop's own dose and says nothing about
+     * what the user is doing. Each bolus is looked at once only
+     * ([AimiLongKey.MealKnownLastBolusMs]), so the same dose cannot keep pushing the end of the
+     * window further away on every tick.
+     *
+     * @param boluses recent boluses, in any order.
+     * @return the bolus that opened the window, or null when nothing was opened.
+     */
+    fun armFromManualBolus(
+        preferences: Preferences,
+        now: Long,
+        boluses: List<BS>,
+    ): BS? {
+        val lastSeen = preferences.get(AimiLongKey.MealKnownLastBolusMs)
+        val candidate = boluses
+            .filter { it.isValid && it.type == BS.Type.NORMAL }
+            .filter { it.amount >= MANUAL_BOLUS_MEAL_THRESHOLD_U }
+            .filter { it.timestamp > lastSeen }
+            .maxByOrNull { it.timestamp }
+            ?: return null
+
+        // Mark it as seen either way, so a correction is not looked at again on every later tick.
+        preferences.put(AimiLongKey.MealKnownLastBolusMs, candidate.timestamp)
+        if (isShieldedByCorrectionNote(preferences, candidate.timestamp)) return null
+
+        // The meal started when the bolus was given, not when the tick noticed it. Normally one or
+        // two ticks apart; after an install or a restart the bolus can be much older, and anchoring
+        // on it is what keeps the second-rise elapsed time honest instead of restarting the clock.
+        arm(preferences, candidate.timestamp.coerceAtMost(now))
+        preferences.put(AimiLongKey.MealKnownBolusAt, candidate.timestamp.coerceAtMost(now))
+        return candidate
+    }
+
+    /**
+     * The light meal button: an AAPS Automation writes a note holding "eating", and that note opens
+     * the window. Nothing is dosed, no carb count is asked for.
+     *
+     * Unlike a manual bolus there is nothing to tell apart here — the user pressed the button on
+     * purpose — so no glucose test is applied.
+     *
+     * @param noteStartMs timestamp of the active note, 0 when none is running.
+     * @return true when this call opened the window.
+     */
+    fun armFromNote(preferences: Preferences, now: Long, noteStartMs: Long): Boolean {
+        if (noteStartMs <= 0L) return false
+        if (noteStartMs <= preferences.get(AimiLongKey.MealKnownLastNoteMs)) return false
+        preferences.put(AimiLongKey.MealKnownLastNoteMs, noteStartMs)
+        arm(preferences, now)
+        return true
+    }
+
+    /**
+     * The "this bolus is a correction" button: an AAPS Automation writes a note holding
+     * "correction", and the meal window closes.
+     *
+     * Written for a morning in a field log: a 1.5 U correction at 145 mg/dL, before a site change,
+     * opened four hours of meal treatment with nothing eaten. Glucose cannot tell that bolus from a
+     * prebolus, only the user can.
+     *
+     * An eating note newer than this note wins and keeps its window. A manual bolus within
+     * [CORRECTION_SHIELD_MIN] of it is the correction itself and opens nothing
+     * ([isShieldedByCorrectionNote]). The keyword holds neither "meal" nor "stop" on purpose: other notes already
+     * match on those words and would start a meal mode or clear every active note.
+     *
+     * @param noteStartMs timestamp of the newest recent "correction" note, 0 when there is none.
+     * @return true when this call closed an open window.
+     */
+    fun applyCorrectionNote(preferences: Preferences, noteStartMs: Long): Boolean {
+        if (noteStartMs <= 0L) return false
+        if (noteStartMs <= preferences.get(AimiLongKey.MealKnownLastCorrectionNoteMs)) return false
+        preferences.put(AimiLongKey.MealKnownLastCorrectionNoteMs, noteStartMs)
+        val armedAt = preferences.get(AimiLongKey.MealKnownArmedAt)
+        if (armedAt <= 0L || armedAt > noteStartMs) return false
+        clear(preferences)
+        return true
+    }
+
+    /** True when [bolusMs] is within [CORRECTION_SHIELD_MIN] of the last "correction" note. */
+    fun isShieldedByCorrectionNote(preferences: Preferences, bolusMs: Long): Boolean {
+        val noteMs = preferences.get(AimiLongKey.MealKnownLastCorrectionNoteMs)
+        return noteMs > 0L && kotlin.math.abs(bolusMs - noteMs) <= CORRECTION_SHIELD_MIN * MIN_MS
+    }
+
+    /** Short state line for `rT.reason` and the logs. */
+    fun statusLine(preferences: Preferences, now: Long): String =
+        if (isMealKnown(preferences, now)) {
+            "🍽️ meal-known: ${remainingMinutes(preferences, now)}min left${if (isBigMeal(preferences)) " (big)" else ""}"
+        } else {
+            "🍽️ meal-known: idle"
+        }
+}

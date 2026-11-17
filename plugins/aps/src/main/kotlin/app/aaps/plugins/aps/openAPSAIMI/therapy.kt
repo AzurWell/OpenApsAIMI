@@ -4,6 +4,7 @@ import app.aaps.core.data.model.TE
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.plugins.aps.openAPSAIMI.basal.CoffeeRiseMode
 import app.aaps.plugins.aps.openAPSAIMI.ml.AimiCorpusPruner
+import app.aaps.plugins.aps.openAPSAIMI.mealconfirm.SmallMealGate
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -56,6 +57,38 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
     /** True while a corpus delete note is active. See [deleteNote]. */
     val deleteTime: Boolean
         get() = deleteNote != null
+
+    /**
+     * Timestamp of the newest active "eating" note, 0 when there is none.
+     *
+     * This is the light meal button: it says a meal is running and nothing else. Unlike the meal
+     * modes ("meal", "lunch", "dinner", ...) it sends no prebolus, does not raise the SMB ceiling
+     * and does not raise the basal cap. `MealKnownGate` reads it.
+     */
+    var mealKnownStartMs = 0L
+
+    /**
+     * Timestamp of the newest recent "correction" note, 0 when there is none.
+     *
+     * The "this bolus is a correction" button: `MealKnownGate` closes the meal window on it.
+     */
+    var correctionNoteStartMs = 0L
+
+    /**
+     * Timestamp of the newest "gros" note of the last day, 0 when there is none.
+     *
+     * The big meal button: it opens the meal window like "eating" and also says the meal is large.
+     * Read whatever its duration, because `BigMealGate` needs it for the whole meal.
+     */
+    var bigMealNoteMs = 0L
+
+    /**
+     * Timestamp of the newest "petit" note of the last day, 0 when there is none.
+     *
+     * The small meal button: it opens the meal window like "eating" and caps the insulin on board
+     * of the meal. Read whatever its duration. See `SmallMealGate`.
+     */
+    var smallMealNoteMs = 0L
     private var latestNoteEvents: List<TE> = emptyList()
 
     fun updateStatesBasedOnTherapyEvents(forceRefresh: Boolean = false) {
@@ -116,6 +149,10 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
                 mealTime = findActiveMealEvents(events, now),
                 anticipTime = findActiveAnticipEvents(events, now),
                 fclTime = findActiveFclEvents(events, now),
+                mealKnownStartMs = findActiveMealKnownStart(events, now),
+                correctionNoteStartMs = findRecentCorrectionNoteStart(events, now),
+                bigMealNoteMs = findLatestBigMealNote(events, now),
+                smallMealNoteMs = findLatestSmallMealNote(events, now),
                 bfastTime = findActivebfastEvents(events, now),
                 lunchTime = findActiveLunchEvents(events, now),
                 dinnerTime = findActiveDinnerEvents(events, now),
@@ -138,6 +175,10 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
             mealTime = false,
             anticipTime = false,
             fclTime = false,
+            mealKnownStartMs = 0L,
+            correctionNoteStartMs = 0L,
+            bigMealNoteMs = 0L,
+            smallMealNoteMs = 0L,
             bfastTime = false,
             lunchTime = false,
             dinnerTime = false,
@@ -159,6 +200,7 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
         persistenceLayer.deleteLastEventMatchingKeyword("meal")
         persistenceLayer.deleteLastEventMatchingKeyword("anticip")
         persistenceLayer.deleteLastEventMatchingKeyword("fcl")
+        persistenceLayer.deleteLastEventMatchingKeyword("eating")
         persistenceLayer.deleteLastEventMatchingKeyword("bfast")
         persistenceLayer.deleteLastEventMatchingKeyword("lunch")
         persistenceLayer.deleteLastEventMatchingKeyword("dinner")
@@ -176,6 +218,10 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
         mealTime = snapshot.mealTime
         anticipTime = snapshot.anticipTime
         fclTime = snapshot.fclTime
+        mealKnownStartMs = snapshot.mealKnownStartMs
+        correctionNoteStartMs = snapshot.correctionNoteStartMs
+        bigMealNoteMs = snapshot.bigMealNoteMs
+        smallMealNoteMs = snapshot.smallMealNoteMs
         bfastTime = snapshot.bfastTime
         lunchTime = snapshot.lunchTime
         dinnerTime = snapshot.dinnerTime
@@ -195,12 +241,60 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
         mealTime = false
         anticipTime = false
         fclTime = false
+        mealKnownStartMs = 0L
+        correctionNoteStartMs = 0L
+        bigMealNoteMs = 0L
+        smallMealNoteMs = 0L
         bfastTime = false
         lunchTime = false
         dinnerTime = false
         fastingTime = false
         deleteNote = null
     }
+
+    /**
+     * Newest active note holding "eating", "gros" (the big meal button) or "petit" (the small meal
+     * button), or 0 when none is running.
+     *
+     * The timestamp is returned rather than a boolean so `MealKnownGate` can open its window once
+     * per note instead of pushing the end further away on every tick.
+     */
+    private fun findActiveMealKnownStart(events: List<TE>, now: Long): Long =
+        events.filter { it.type == TE.Type.NOTE }
+            .filter { event ->
+                (event.note?.contains("eating", ignoreCase = true) == true || isBigMealNote(event) ||
+                    SmallMealGate.isSmallMealNote(event.note)) &&
+                    now <= (event.timestamp + event.duration)
+            }
+            .maxOfOrNull { it.timestamp } ?: 0L
+
+    /** Newest "gros" note already written, whatever its duration, or 0 when there is none. */
+    private fun findLatestBigMealNote(events: List<TE>, now: Long): Long =
+        events.filter { it.type == TE.Type.NOTE && it.timestamp <= now && isBigMealNote(it) }
+            .maxOfOrNull { it.timestamp } ?: 0L
+
+    /** Newest "petit" note already written, whatever its duration, or 0 when there is none. */
+    private fun findLatestSmallMealNote(events: List<TE>, now: Long): Long =
+        events.filter { it.type == TE.Type.NOTE && it.timestamp <= now && SmallMealGate.isSmallMealNote(it.note) }
+            .maxOfOrNull { it.timestamp } ?: 0L
+
+    private fun isBigMealNote(event: TE): Boolean =
+        event.note?.contains("gros", ignoreCase = true) == true
+
+    /**
+     * Newest note holding "correction" from the last 30 minutes, or 0 when there is none.
+     *
+     * Read over a fixed 30 minutes as well as the note's own duration: an Automation that writes
+     * the note with no duration must still be seen on the next tick.
+     */
+    private fun findRecentCorrectionNoteStart(events: List<TE>, now: Long): Long =
+        events.filter { it.type == TE.Type.NOTE }
+            .filter { event ->
+                event.note?.contains("correction", ignoreCase = true) == true &&
+                    event.timestamp <= now &&
+                    now <= event.timestamp + maxOf(event.duration, TimeUnit.MINUTES.toMillis(30))
+            }
+            .maxOfOrNull { it.timestamp } ?: 0L
 
     private fun findActiveSleepEvents(events: List<TE>, now: Long): Boolean =
         events.filter { it.type == TE.Type.NOTE }
@@ -390,6 +484,10 @@ class Therapy(private val persistenceLayer: PersistenceLayer) {
         val mealTime: Boolean,
         val anticipTime: Boolean,
         val fclTime: Boolean,
+        val mealKnownStartMs: Long,
+        val correctionNoteStartMs: Long,
+        val bigMealNoteMs: Long,
+        val smallMealNoteMs: Long,
         val bfastTime: Boolean,
         val lunchTime: Boolean,
         val dinnerTime: Boolean,

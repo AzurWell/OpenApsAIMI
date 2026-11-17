@@ -139,7 +139,15 @@ class MaintenanceImpl @Inject constructor(
                 && (name.endsWith(".log")
                 || name.endsWith(".zip") && !name.endsWith(loggerUtils.suffix)))
         } ?: emptyArray()
-        Arrays.sort(files) { f1: File, f2: File -> f2.name.compareTo(f1.name) }
+        // Newest first by modification time, not by name. The rotated files are named
+        // AndroidAPS._<date>_<time>_.<i>.zip, and a name sort compares <i> as text, so ".9" sorts
+        // above ".13": asking for the 10 most recent logs shipped older files and dropped the
+        // hours just before the export.
+        // Name stays as the tie-break so files sharing a timestamp keep a stable order.
+        Arrays.sort(files) { f1: File, f2: File ->
+            val byTime = f2.lastModified().compareTo(f1.lastModified())
+            if (byTime != 0) byTime else f2.name.compareTo(f1.name)
+        }
         val result = listOf(*files)
         val toIndex = if (amount > result.size) result.size else amount
 

@@ -17,5 +17,31 @@ enum class AimiLongKey(
     // 🍱 Legacy meal prebolus delivery tracking (carry-forward retry)
     LastLegacyPrebolusTime("oa_aimi_last_legacy_prebolus_time_ms", 0L),
     PendingLegacyPrebolusUnitMilli("oa_aimi_pending_legacy_prebolus_unit_milli", 0L),
-    PendingLegacyPrebolusExpiry("oa_aimi_pending_legacy_prebolus_expiry_ms", 0L)
+    PendingLegacyPrebolusExpiry("oa_aimi_pending_legacy_prebolus_expiry_ms", 0L),
+
+    // 🍽️ Meal knowledge, decoupled from the meal modes (MealKnownGate)
+    /** A meal is considered in progress until this wall-clock ms. 0 = no meal known. */
+    MealKnownUntil("oa_aimi_meal_known_until_ms", 0L),
+    /** When the current meal window was opened, for the second-wave elapsed time. */
+    MealKnownArmedAt("oa_aimi_meal_known_armed_at_ms", 0L),
+    /** Timestamp of the last manual bolus already examined, so one bolus arms at most once. */
+    MealKnownLastBolusMs("oa_aimi_meal_known_last_bolus_ms", 0L),
+    /** Timestamp of the last "eating" note already used, so one note arms at most once. */
+    MealKnownLastNoteMs("oa_aimi_meal_known_last_note_ms", 0L),
+    /** Timestamp of the last "correction" note already used, so one note acts at most once. */
+    MealKnownLastCorrectionNoteMs("oa_aimi_meal_known_last_correction_note_ms", 0L),
+    /** Glucose (mg/dL) on the first tick after the meal was declared. 0 = nothing recorded yet. */
+    MealKnownBgStartMgdl("oa_aimi_meal_known_bg_start_mgdl", 0L),
+    /** Highest glucose (mg/dL) since the meal was declared. */
+    MealKnownBgPeakMgdl("oa_aimi_meal_known_bg_peak_mgdl", 0L),
+    /** Lowest glucose (mg/dL) since that peak. */
+    MealKnownBgTroughMgdl("oa_aimi_meal_known_bg_trough_mgdl", 0L),
+    /** Lowest glucose (mg/dL) from one hour after the meal was declared. 0 = nothing recorded yet. */
+    MealKnownBgLateTroughMgdl("oa_aimi_meal_known_bg_late_trough_mgdl", 0L),
+    /** When a late rise of the current meal was first seen (`SecondWaveGate.lateRise`). 0 = not seen. */
+    MealKnownLateWaveAt("oa_aimi_meal_known_late_wave_at_ms", 0L),
+    /** Time of the manual bolus that opened the current meal window. 0 = opened by a note, or none. */
+    MealKnownBolusAt("oa_aimi_meal_known_bolus_at_ms", 0L),
+    /** Start of the meal that was found to be big (`MealKnownGate.markBigMeal`). Big only while it equals `MealKnownArmedAt`. */
+    MealKnownBigMealAt("oa_aimi_meal_known_big_meal_at_ms", 0L)
 }
